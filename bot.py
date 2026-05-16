@@ -1,11 +1,11 @@
+import os
 from telethon import TelegramClient, events
 import re
 from datetime import datetime, timedelta
-import os
 
-api_id = 123456
-api_hash = "YOUR_API_HASH"
-bot_token = "YOUR_BOT_TOKEN"
+api_id = int(os.getenv("API_ID"))
+api_hash = os.getenv("API_HASH")
+bot_token = os.getenv("BOT_TOKEN")
 
 source_channel = "mulhim00"
 target_channel = "VeraFashionGaza"
@@ -16,14 +16,15 @@ client = TelegramClient('bot', api_id, api_hash).start(bot_token=bot_token)
 def increase_prices(text):
     return re.sub(r"\$(\d+)", lambda m: f"${int(m.group(1)) + 4}", text)
 
-# تحقق إذا أول تشغيل
+# ملف أول تشغيل
 FIRST_RUN_FILE = "first_run.txt"
 
+# أول تشغيل (آخر 30 يوم)
 async def first_run():
     if os.path.exists(FIRST_RUN_FILE):
         return
 
-    print("First run: fetching last 30 days...")
+    print("Fetching last 30 days...")
 
     limit_date = datetime.now() - timedelta(days=30)
 
@@ -40,11 +41,10 @@ async def first_run():
             if new_text:
                 await client.send_message(target_channel, new_text)
 
-    # نحفظ إنه خلصنا
     with open(FIRST_RUN_FILE, "w") as f:
         f.write("done")
 
-# استقبال الرسائل الجديدة
+# لايف
 @client.on(events.NewMessage(chats=source_channel))
 async def handler(event):
     text = event.message.message or ""
@@ -57,7 +57,7 @@ async def handler(event):
 
 async def main():
     await first_run()
-    print("Now listening for new messages...")
+    print("Bot started...")
     await client.run_until_disconnected()
 
 client.loop.run_until_complete(main())
