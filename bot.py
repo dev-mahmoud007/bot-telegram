@@ -1,37 +1,28 @@
 import os
 from telethon import TelegramClient, events
 import re
-from datetime import datetime, timedelta
 
+# متغيرات Railway
 api_id = int(os.getenv("API_ID"))
 api_hash = os.getenv("API_HASH")
 bot_token = os.getenv("BOT_TOKEN")
 
+# القنوات
 source_channel = "mulhim00"
 target_channel = "VeraFashionGaza"
 
+# تشغيل البوت
 client = TelegramClient('bot', api_id, api_hash).start(bot_token=bot_token)
 
 # تعديل الأسعار
 def increase_prices(text):
     return re.sub(r"\$(\d+)", lambda m: f"${int(m.group(1)) + 4}", text)
 
-# ملف أول تشغيل
-FIRST_RUN_FILE = "first_run.txt"
-
-# أول تشغيل (آخر 30 يوم)
+# أول تشغيل (آخر 50 منشور)
 async def first_run():
-    if os.path.exists(FIRST_RUN_FILE):
-        return
+    print("Fetching last messages...")
 
-    print("Fetching last 30 days...")
-
-    limit_date = datetime.now() - timedelta(days=30)
-
-    async for msg in client.iter_messages(source_channel):
-        if msg.date < limit_date:
-            break
-
+    async for msg in client.iter_messages(source_channel, limit=50):
         text = msg.message or ""
         new_text = increase_prices(text)
 
@@ -41,8 +32,7 @@ async def first_run():
             if new_text:
                 await client.send_message(target_channel, new_text)
 
-    with open(FIRST_RUN_FILE, "w") as f:
-        f.write("done")
+    print("Done first run.")
 
 # لايف
 @client.on(events.NewMessage(chats=source_channel))
@@ -55,6 +45,7 @@ async def handler(event):
     else:
         await client.send_message(target_channel, new_text)
 
+# تشغيل
 async def main():
     await first_run()
     print("Bot started...")
