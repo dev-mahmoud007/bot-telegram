@@ -46,6 +46,6 @@ async def handler(event):
 
     except Exception as e:
         print("Error:", e)
-
+print("TOKEN:", bot_token)
 # تشغيل دائم
 client.run_until_disconnected()
