@@ -14,39 +14,13 @@ target_channel = "VeraFashionGaza"
 # تشغيل البوت
 client = TelegramClient('bot', api_id, api_hash).start(bot_token=bot_token)
 
-print("Bot is starting...")
+print("Bot is running (LIVE MODE)...")
 
-# تعديل الأسعار
+# تعديل السعر
 def increase_prices(text):
     return re.sub(r"\$(\d+)", lambda m: f"${int(m.group(1)) + 4}", text)
 
-# أول تشغيل (يسحب آخر 100 منشور)
-async def first_run():
-    print("FIRST RUN WORKING...")
-    count = 0
-
-    async for msg in client.iter_messages(source_channel, limit=100):
-        print("Reading message...")
-
-        text = msg.message or ""
-        new_text = increase_prices(text)
-
-        try:
-            if msg.media:
-                await client.send_file(target_channel, msg.media, caption=new_text)
-            else:
-                if new_text:
-                    await client.send_message(target_channel, new_text)
-
-            print("Sent:", new_text)
-            count += 1
-
-        except Exception as e:
-            print("Error while sending:", e)
-
-    print(f"Done first run. Sent {count} messages.")
-
-# لايف
+# استقبال المنشورات الجديدة فقط
 @client.on(events.NewMessage(chats=source_channel))
 async def handler(event):
     print("New message detected!")
@@ -56,19 +30,22 @@ async def handler(event):
 
     try:
         if event.message.media:
-            await client.send_file(target_channel, event.message.media, caption=new_text)
+            await client.send_file(
+                target_channel,
+                event.message.media,
+                caption=new_text
+            )
         else:
-            await client.send_message(target_channel, new_text)
+            if new_text:
+                await client.send_message(
+                    target_channel,
+                    new_text
+                )
 
-        print("Live sent:", new_text)
+        print("Sent:", new_text)
 
     except Exception as e:
-        print("Live error:", e)
+        print("Error:", e)
 
-# التشغيل
-async def main():
-    await first_run()
-    print("Bot started and listening...")
-    await client.run_until_disconnected()
-
-client.loop.run_until_complete(main())
+# تشغيل دائم
+client.run_until_disconnected()
