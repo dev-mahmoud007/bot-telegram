@@ -14,41 +14,61 @@ target_channel = "VeraFashionGaza"
 # تشغيل البوت
 client = TelegramClient('bot', api_id, api_hash).start(bot_token=bot_token)
 
+print("Bot is starting...")
+
 # تعديل الأسعار
 def increase_prices(text):
     return re.sub(r"\$(\d+)", lambda m: f"${int(m.group(1)) + 4}", text)
 
-# أول تشغيل (آخر 50 منشور)
+# أول تشغيل (يسحب آخر 100 منشور)
 async def first_run():
-    print("Fetching last messages...")
+    print("FIRST RUN WORKING...")
+    count = 0
 
-    async for msg in client.iter_messages(source_channel, limit=50):
+    async for msg in client.iter_messages(source_channel, limit=100):
+        print("Reading message...")
+
         text = msg.message or ""
         new_text = increase_prices(text)
 
-        if msg.media:
-            await client.send_file(target_channel, msg.media, caption=new_text)
-        else:
-            if new_text:
-                await client.send_message(target_channel, new_text)
+        try:
+            if msg.media:
+                await client.send_file(target_channel, msg.media, caption=new_text)
+            else:
+                if new_text:
+                    await client.send_message(target_channel, new_text)
 
-    print("Done first run.")
+            print("Sent:", new_text)
+            count += 1
+
+        except Exception as e:
+            print("Error while sending:", e)
+
+    print(f"Done first run. Sent {count} messages.")
 
 # لايف
 @client.on(events.NewMessage(chats=source_channel))
 async def handler(event):
+    print("New message detected!")
+
     text = event.message.message or ""
     new_text = increase_prices(text)
 
-    if event.message.media:
-        await client.send_file(target_channel, event.message.media, caption=new_text)
-    else:
-        await client.send_message(target_channel, new_text)
+    try:
+        if event.message.media:
+            await client.send_file(target_channel, event.message.media, caption=new_text)
+        else:
+            await client.send_message(target_channel, new_text)
 
-# تشغيل
+        print("Live sent:", new_text)
+
+    except Exception as e:
+        print("Live error:", e)
+
+# التشغيل
 async def main():
     await first_run()
-    print("Bot started...")
+    print("Bot started and listening...")
     await client.run_until_disconnected()
 
 client.loop.run_until_complete(main())
