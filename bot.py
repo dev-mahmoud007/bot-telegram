@@ -3,9 +3,10 @@ import re
 from datetime import datetime, timedelta
 import os
 
-api_id = 123456
-api_hash = "YOUR_API_HASH"
-bot_token = "YOUR_BOT_TOKEN"
+api_id = int(os.environ["API_ID"])
+api_hash = os.environ["API_HASH"]
+bot_token = os.environ["BOT_TOKEN"]
+
 
 source_channel = "mulhim00"
 target_channel = "VeraFashionGaza"
