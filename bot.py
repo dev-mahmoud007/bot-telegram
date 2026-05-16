@@ -7,8 +7,8 @@ api_id = 123456
 api_hash = "YOUR_API_HASH"
 bot_token = "YOUR_BOT_TOKEN"
 
-source_channel = "source_channel_username"
-target_channel = "target_channel_username"
+source_channel = "mulhim00"
+target_channel = "VeraFashionGaza"
 
 client = TelegramClient('bot', api_id, api_hash).start(bot_token=bot_token)
 
