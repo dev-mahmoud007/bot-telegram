@@ -1,26 +1,65 @@
 import os
 from telethon import TelegramClient, events
+from telethon.sessions import StringSession
 import re
+from datetime import datetime, timedelta
 
 # متغيرات Railway
 api_id = int(os.getenv("API_ID"))
 api_hash = os.getenv("API_HASH")
-bot_token = os.getenv("BOT_TOKEN")
+string_session = os.getenv("STRING_SESSION")
+
+client = TelegramClient(StringSession(string_session), api_id, api_hash)
 
 # القنوات
 source_channel = "mulhim00"
 target_channel = "VeraFashionGaza"
 
-# تشغيل البوت
-client = TelegramClient('bot', api_id, api_hash).start(bot_token=bot_token)
-
-print("Bot is running (LIVE MODE)...")
+print("User Bot running...")
 
 # تعديل السعر
 def increase_prices(text):
-    return re.sub(r"\$(\d+)", lambda m: f"${int(m.group(1)) + 4}", text)
+    if not text:
+        return text
 
-# استقبال المنشورات الجديدة فقط
+    text = re.sub(
+        r"(السعر\s*:\s*)(\d+)\$",
+        lambda m: f"{m.group(1)}{int(m.group(2)) + 4}$",
+        text
+    )
+
+    return text
+
+# 🟡 سحب آخر 50 يوم
+async def first_run():
+    print("Fetching last 50 days posts...")
+
+    since_date = datetime.now() - timedelta(days=50)
+    count = 0
+
+    async for msg in client.iter_messages(source_channel):
+        if msg.date < since_date:
+            break
+
+        text = msg.message or ""
+        new_text = increase_prices(text)
+
+        try:
+            if msg.media:
+                await client.send_file(target_channel, msg.media, caption=new_text)
+            else:
+                if new_text:
+                    await client.send_message(target_channel, new_text)
+
+            count += 1
+            print(f"Sent old post {count}")
+
+        except Exception as e:
+            print("Error:", e)
+
+    print(f"Done. Sent {count} old posts.")
+
+# 🔵 لايف
 @client.on(events.NewMessage(chats=source_channel))
 async def handler(event):
     print("New message detected!")
@@ -30,22 +69,21 @@ async def handler(event):
 
     try:
         if event.message.media:
-            await client.send_file(
-                target_channel,
-                event.message.media,
-                caption=new_text
-            )
+            await client.send_file(target_channel, event.message.media, caption=new_text)
         else:
             if new_text:
-                await client.send_message(
-                    target_channel,
-                    new_text
-                )
+                await client.send_message(target_channel, new_text)
 
-        print("Sent:", new_text)
+        print("Live sent:", new_text)
 
     except Exception as e:
-        print("Error:", e)
-print("TOKEN:", bot_token)
-# تشغيل دائم
-client.run_until_disconnected()
+        print("Live error:", e)
+
+# التشغيل
+async def main():
+    await first_run()  # 👈 يسحب القديم مرة وحدة
+    print("Now listening for new posts...")
+    await client.run_until_disconnected()
+
+client.start()
+client.loop.run_until_complete(main())
