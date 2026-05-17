@@ -16,7 +16,6 @@ target_channel = "VeraFashionGaza"
 
 print("Smart Bot running...")
 
-# تعديل السعر
 def increase_prices(text):
     if not text:
         return text
@@ -27,35 +26,58 @@ def increase_prices(text):
         text
     )
 
-# تخزين الوسائط
 media_buffer = []
-last_group_id = None
+waiting_for_text = False
 
 @client.on(events.NewMessage(chats=source_channel))
 async def handler(event):
-    global media_buffer, last_group_id
+    global media_buffer, waiting_for_text
 
     msg = event.message
 
     try:
-        # 📸 إذا ألبوم (grouped)
-        if msg.grouped_id:
-            if last_group_id != msg.grouped_id:
-                media_buffer = []  # ألبوم جديد
-
-            last_group_id = msg.grouped_id
-
-            if msg.media:
-                media_buffer.append(msg.media)
-
-            print("Album media added:", len(media_buffer))
-            return
-
-        # 📸 إذا وسائط مفردة (بدون grouped)
+        # 📸 إذا وسائط
         if msg.media:
             media_buffer.append(msg.media)
-            print("Single media added:", len(media_buffer))
+            waiting_for_text = True
+            print("Media stored:", len(media_buffer))
             return
 
-        # 📝 إذا نص → انشر مع الوسائط
+        # 📝 إذا نص
+        if msg.text and waiting_for_text:
+            text = increase_prices(msg.text)
+
+            await client.send_file(
+                target_channel,
+                media_buffer,
+                caption=text
+            )
+
+            print("Sent correctly (media + caption)")
+
+            # 🔥 reset
+            media_buffer = []
+            waiting_for_text = False
+
+            await asyncio.sleep(5)
+            return
+
+        # 📝 نص بدون وسائط
         if msg.text:
+            text = increase_prices(msg.text)
+            await client.send_message(target_channel, text)
+            print("Text only sent")
+
+    except FloodWaitError as e:
+        print(f"Flood wait: {e.seconds}")
+        await asyncio.sleep(e.seconds)
+
+    except Exception as e:
+        print("Error:", e)
+
+async def main():
+    print("Listening...")
+    await client.run_until_disconnected()
+
+client.start()
+client.loop.run_until_complete(main())
