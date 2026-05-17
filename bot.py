@@ -1,9 +1,9 @@
 import os
+import asyncio
+import re
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError
-import re
-import asyncio
 
 api_id = int(os.getenv("API_ID"))
 api_hash = os.getenv("API_HASH")
@@ -14,8 +14,9 @@ client = TelegramClient(StringSession(string_session), api_id, api_hash)
 source_channel = "mulhim00"
 target_channel = "VeraFashionGaza"
 
-print("Album Bot running...")
+print("STRICT Smart Bot running...")
 
+# تعديل السعر
 def increase_prices(text):
     if not text:
         return text
@@ -26,64 +27,61 @@ def increase_prices(text):
         text
     )
 
-albums = {}
+# 🧠 التخزين
+media_buffer = []
+waiting_for_text = False
 
 @client.on(events.NewMessage(chats=source_channel))
 async def handler(event):
-    global albums
+    global media_buffer, waiting_for_text
 
     msg = event.message
 
     try:
-        # 📸 إذا ألبوم
-        if msg.grouped_id:
-            gid = msg.grouped_id
-
-            if gid not in albums:
-                albums[gid] = {
-                    "media": [],
-                    "text": None
-                }
-
-            albums[gid]["media"].append(msg)
-
-            if msg.text:
-                albums[gid]["text"] = msg.text
-
-            # ⏳ انتظار اكتمال الألبوم
-            await asyncio.sleep(2)
-
-            if gid in albums:
-                data = albums.pop(gid)
-
-                media_files = [m.media for m in data["media"]]
-                text = increase_prices(data["text"])
-
-                # 📸 إرسال الألبوم بدون كابشن
-                await client.send_file(
-                    target_channel,
-                    media_files
-                )
-
-                await asyncio.sleep(1)
-
-                # 📝 إرسال النص تحت
-                if text:
-                    await client.send_message(
-                        target_channel,
-                        text
-                    )
-
-                print("Album + text sent ✅")
-
+        # 📸 أي وسائط → خزّن فقط
+        if msg.media:
+            media_buffer.append(msg.media)
+            waiting_for_text = True
+            print(f"Collected media: {len(media_buffer)}")
             return
 
-        # 📝 نص عادي
-        if msg.text:
-            await client.send_message(
-                target_channel,
-                increase_prices(msg.text)
-            )
+        # 📝 نص → فقط إذا عندنا وسائط
+        if msg.text and waiting_for_text:
+            text = increase_prices(msg.text)
+
+            # ⏳ ننتظر شوي عشان نتأكد كل الوسائط وصلت
+            await asyncio.sleep(2)
+
+            # 🔥 تقسيم (حد Telegram = 10)
+            chunks = [media_buffer[i:i+10] for i in range(0, len(media_buffer), 10)]
+
+            for i, chunk in enumerate(chunks):
+                if i == 0:
+                    # أول دفعة مع النص (كابشن)
+                    await client.send_file(
+                        target_channel,
+                        chunk,
+                        caption=text
+                    )
+                else:
+                    await client.send_file(
+                        target_channel,
+                        chunk
+                    )
+
+                await asyncio.sleep(2)
+
+            print(f"✅ Sent {len(media_buffer)} media with text")
+
+            # 🔄 reset
+            media_buffer = []
+            waiting_for_text = False
+            return
+
+        # ❌ نص بدون وسائط → تجاهل (حسب طلبك)
+        if msg.text and not waiting_for_text:
+            print("Ignored text بدون وسائط")
+            return
 
     except FloodWaitError as e:
         print(f"Flood wait: {e.seconds}")
