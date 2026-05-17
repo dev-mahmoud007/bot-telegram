@@ -14,7 +14,7 @@ client = TelegramClient(StringSession(string_session), api_id, api_hash)
 source_channel = "mulhim00"
 target_channel = "VeraFashionGaza"
 
-print("Smart Bot running...")
+print("Album Bot running...")
 
 def increase_prices(text):
     if not text:
@@ -26,54 +26,64 @@ def increase_prices(text):
         text
     )
 
-media_buffer = []
-collecting = False
+albums = {}
 
 @client.on(events.NewMessage(chats=source_channel))
 async def handler(event):
-    global media_buffer, collecting
+    global albums
 
     msg = event.message
 
     try:
-        # 📸 تجميع الوسائط
-        if msg.media:
-            media_buffer.append(msg.media)
-            collecting = True
-            print("Collected:", len(media_buffer))
-            return
+        # 📸 إذا ألبوم
+        if msg.grouped_id:
+            gid = msg.grouped_id
 
-        # 📝 لما يوصل النص
-        if msg.text and collecting:
-            text = increase_prices(msg.text)
+            if gid not in albums:
+                albums[gid] = {
+                    "media": [],
+                    "text": None
+                }
 
-            # ⏳ ننتظر تجميع كامل
+            albums[gid]["media"].append(msg)
+
+            if msg.text:
+                albums[gid]["text"] = msg.text
+
+            # ⏳ انتظار اكتمال الألبوم
             await asyncio.sleep(2)
 
-            # 🔥 تقسيم (حد 10)
-            chunks = [media_buffer[i:i+10] for i in range(0, len(media_buffer), 10)]
+            if gid in albums:
+                data = albums.pop(gid)
 
-            for i, chunk in enumerate(chunks):
-                if i == 0:
-                    await client.send_file(
+                media_files = [m.media for m in data["media"]]
+                text = increase_prices(data["text"])
+
+                # 📸 إرسال الألبوم بدون كابشن
+                await client.send_file(
+                    target_channel,
+                    media_files
+                )
+
+                await asyncio.sleep(1)
+
+                # 📝 إرسال النص تحت
+                if text:
+                    await client.send_message(
                         target_channel,
-                        chunk,
-                        caption=text
+                        text
                     )
-                else:
-                    await client.send_file(target_channel, chunk)
 
-                await asyncio.sleep(2)
+                print("Album + text sent ✅")
 
-            print(f"Sent {len(media_buffer)} media")
-
-            media_buffer = []
-            collecting = False
             return
 
-        # نص بدون وسائط
+        # 📝 نص عادي
         if msg.text:
-            await client.send_message(target_channel, increase_prices(msg.text))
+            await client.send_message(
+                target_channel,
+                increase_prices(msg.text)
+            )
 
     except FloodWaitError as e:
         print(f"Flood wait: {e.seconds}")
