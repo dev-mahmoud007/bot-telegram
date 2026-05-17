@@ -9,7 +9,6 @@ api_id = int(os.getenv("API_ID"))
 api_hash = os.getenv("API_HASH")
 string_session = os.getenv("STRING_SESSION")
 
-# تشغيل
 client = TelegramClient(StringSession(string_session), api_id, api_hash)
 
 # القنوات
@@ -31,11 +30,11 @@ def increase_prices(text):
 
     return text
 
-# 🟡 سحب آخر 50 يوم (بدون كراش)
+# 🟡 سحب آخر 7 أيام فقط
 async def first_run():
-    print("Fetching last 50 days posts...")
+    print("Fetching last 7 days posts...")
 
-    since_date = datetime.now(timezone.utc) - timedelta(days=50)
+    since_date = datetime.now(timezone.utc) - timedelta(days=7)
     count = 0
 
     async for msg in client.iter_messages(source_channel):
@@ -97,9 +96,9 @@ async def handler(event):
     except Exception as e:
         print("Live error:", e)
 
-# 🚀 التشغيل
+# التشغيل
 async def main():
-    await first_run()  # 👈 يسحب القديم مرة واحدة
+    await first_run()  # 👈 يسحب أسبوع فقط
     print("Now listening for new posts...")
     await client.run_until_disconnected()
 
