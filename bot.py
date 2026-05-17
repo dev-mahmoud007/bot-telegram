@@ -14,76 +14,64 @@ client = TelegramClient(StringSession(string_session), api_id, api_hash)
 source_channel = "mulhim00"
 target_channel = "VeraFashionGaza"
 
-print("User Bot running...")
+print("Smart Bot running...")
 
+# 🔥 تعديل السعر
 def increase_prices(text):
     if not text:
         return text
 
-    text = re.sub(
+    return re.sub(
         r"(السعر\s*:\s*)(\d+)\$",
         lambda m: f"{m.group(1)}{int(m.group(2)) + 4}$",
         text
     )
 
-    return text
+# 🧠 تخزين الوسائط مؤقتًا
+media_buffer = []
 
-# 🟡 سحب آخر 10 مع حماية من الحظر
-async def first_run():
-    print("Fetching last 10 posts safely...")
-
-    count = 0
-
-    async for msg in client.iter_messages(source_channel, limit=10):
-        text = msg.message or ""
-        new_text = increase_prices(text)
-
-        try:
-            if msg.media:
-                await client.send_file(target_channel, msg.media, caption=new_text)
-            else:
-                if new_text:
-                    await client.send_message(target_channel, new_text)
-
-            count += 1
-            print(f"Sent {count}")
-
-            # 🔥 أهم سطر (تخفيف السرعة)
-            await asyncio.sleep(5)
-
-        except FloodWaitError as e:
-            print(f"⏳ Flood wait: sleeping {e.seconds} seconds...")
-            await asyncio.sleep(e.seconds)
-
-        except Exception as e:
-            print("Error:", e)
-
-    print(f"Done. Sent {count} posts.")
-
-# 🔵 لايف
 @client.on(events.NewMessage(chats=source_channel))
 async def handler(event):
-    text = event.message.message or ""
-    new_text = increase_prices(text)
+    global media_buffer
+
+    msg = event.message
 
     try:
-        if event.message.media:
-            await client.send_file(target_channel, event.message.media, caption=new_text)
-        else:
-            if new_text:
-                await client.send_message(target_channel, new_text)
+        # 📸 إذا فيه وسائط → خزّن
+        if msg.media:
+            media_buffer.append(msg.media)
+            print("Media added to buffer:", len(media_buffer))
+            return
 
-        print("Live sent")
+        # 📝 إذا فيه نص → انشر الوسائط + النص
+        if msg.text:
+            text = increase_prices(msg.text)
+
+            if media_buffer:
+                await client.send_file(
+                    target_channel,
+                    media_buffer,
+                    caption=text
+                )
+                print("Sent media + text")
+
+                media_buffer = []  # 🔥 تصفير
+
+            else:
+                # إذا نص لحاله
+                await client.send_message(target_channel, text)
+                print("Sent text only")
+
+            await asyncio.sleep(5)
 
     except FloodWaitError as e:
-        print(f"⏳ Flood wait (live): {e.seconds}")
+        print(f"Flood wait: {e.seconds}")
         await asyncio.sleep(e.seconds)
 
     except Exception as e:
-        print("Live error:", e)
+        print("Error:", e)
 
 async def main():
-    await first_run()
     print("Listening...")
     await client.run_until_disconnected()
 
