@@ -27,46 +27,53 @@ def increase_prices(text):
     )
 
 media_buffer = []
-waiting_for_text = False
+collecting = False
 
 @client.on(events.NewMessage(chats=source_channel))
 async def handler(event):
-    global media_buffer, waiting_for_text
+    global media_buffer, collecting
 
     msg = event.message
 
     try:
-        # 📸 إذا وسائط
+        # 📸 تجميع الوسائط
         if msg.media:
             media_buffer.append(msg.media)
-            waiting_for_text = True
-            print("Media stored:", len(media_buffer))
+            collecting = True
+            print("Collected:", len(media_buffer))
             return
 
-        # 📝 إذا نص
-        if msg.text and waiting_for_text:
+        # 📝 لما يوصل النص
+        if msg.text and collecting:
             text = increase_prices(msg.text)
 
-            await client.send_file(
-                target_channel,
-                media_buffer,
-                caption=text
-            )
+            # ⏳ ننتظر تجميع كامل
+            await asyncio.sleep(2)
 
-            print("Sent correctly (media + caption)")
+            # 🔥 تقسيم (حد 10)
+            chunks = [media_buffer[i:i+10] for i in range(0, len(media_buffer), 10)]
 
-            # 🔥 reset
+            for i, chunk in enumerate(chunks):
+                if i == 0:
+                    await client.send_file(
+                        target_channel,
+                        chunk,
+                        caption=text
+                    )
+                else:
+                    await client.send_file(target_channel, chunk)
+
+                await asyncio.sleep(2)
+
+            print(f"Sent {len(media_buffer)} media")
+
             media_buffer = []
-            waiting_for_text = False
-
-            await asyncio.sleep(5)
+            collecting = False
             return
 
-        # 📝 نص بدون وسائط
+        # نص بدون وسائط
         if msg.text:
-            text = increase_prices(msg.text)
-            await client.send_message(target_channel, text)
-            print("Text only sent")
+            await client.send_message(target_channel, increase_prices(msg.text))
 
     except FloodWaitError as e:
         print(f"Flood wait: {e.seconds}")
