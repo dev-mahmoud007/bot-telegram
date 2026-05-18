@@ -5,6 +5,7 @@ from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError
 
+# 🔐 إعدادات
 api_id = int(os.getenv("API_ID"))
 api_hash = os.getenv("API_HASH")
 string_session = os.getenv("STRING_SESSION")
@@ -16,18 +17,18 @@ target_channel = "VeraFashionGaza"
 
 print("STRICT Smart Bot running...")
 
-# تعديل السعر
+# 🔥 تعديل السعر (يدعم 4 و 4.5)
 def increase_prices(text):
     if not text:
         return text
 
     return re.sub(
-        r"(السعر\s*:\s*)(\d+)\$",
-        lambda m: f"{m.group(1)}{int(m.group(2)) + 4}$",
+        r"(السعر\s*:\s*)(\d+(?:\.\d+)?)\$",
+        lambda m: f"{m.group(1)}{float(m.group(2)) + 4:g}$",
         text
     )
 
-# 🧠 التخزين
+# 🧠 تخزين الوسائط
 media_buffer = []
 waiting_for_text = False
 
@@ -38,26 +39,26 @@ async def handler(event):
     msg = event.message
 
     try:
-        # 📸 أي وسائط → خزّن فقط
+        # 📸 إذا وسائط → خزّن فقط
         if msg.media:
             media_buffer.append(msg.media)
             waiting_for_text = True
             print(f"Collected media: {len(media_buffer)}")
             return
 
-        # 📝 نص → فقط إذا عندنا وسائط
+        # 📝 إذا نص + عندنا وسائط
         if msg.text and waiting_for_text:
             text = increase_prices(msg.text)
 
-            # ⏳ ننتظر شوي عشان نتأكد كل الوسائط وصلت
+            # ⏳ تأخير بسيط لضمان اكتمال الوسائط
             await asyncio.sleep(2)
 
-            # 🔥 تقسيم (حد Telegram = 10)
+            # 🔥 تقسيم الوسائط (حد Telegram = 10)
             chunks = [media_buffer[i:i+10] for i in range(0, len(media_buffer), 10)]
 
             for i, chunk in enumerate(chunks):
                 if i == 0:
-                    # أول دفعة مع النص (كابشن)
+                    # أول دفعة مع النص
                     await client.send_file(
                         target_channel,
                         chunk,
@@ -73,12 +74,12 @@ async def handler(event):
 
             print(f"✅ Sent {len(media_buffer)} media with text")
 
-            # 🔄 reset
+            # 🔄 إعادة تعيين
             media_buffer = []
             waiting_for_text = False
             return
 
-        # ❌ نص بدون وسائط → تجاهل (حسب طلبك)
+        # ❌ نص بدون وسائط → تجاهل
         if msg.text and not waiting_for_text:
             print("Ignored text بدون وسائط")
             return
@@ -90,6 +91,7 @@ async def handler(event):
     except Exception as e:
         print("Error:", e)
 
+# 🚀 تشغيل
 async def main():
     print("Listening...")
     await client.run_until_disconnected()
