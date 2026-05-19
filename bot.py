@@ -23,16 +23,30 @@ def format_post(text):
     if not text:
         return None
 
+    lines = text.strip().split("\n")
+
+    # 🟡 أول سطر من المصدر
+    first_line = lines[0].strip() if lines else ""
+
+    # باقي النص بدون أول سطر
+    rest_text = "\n".join(lines[1:])
+
+    # السعر
     price_match = re.search(r"السعر\s*:\s*(\d+(?:\.\d+)?)", text)
     price = float(price_match.group(1)) + 4 if price_match else ""
 
+    # القياسات
     size_match = re.search(r"(?:المقاس|المقاسات|القياسات)\s*:\s*(.+)", text)
     size = size_match.group(1).strip() if size_match else ""
 
+    # الكود
     code_match = re.search(r"الكود\s*:\s*(.+)", text)
     code = code_match.group(1).strip() if code_match else ""
 
+    # ✨ النص النهائي
     return f"""✨ فيرا فاشون | Vera Fashion 👗
+
+{first_line}
 
 الخامة: تركية مستوردة عالية الجودة 🇹🇷
 
