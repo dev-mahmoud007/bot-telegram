@@ -1,9 +1,26 @@
 import os
+import sys
 import asyncio
 import re
 from datetime import datetime, timedelta, timezone
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
+
+# 🛑 منع تشغيل أكثر من نسخة (حل نهائي للـ crash)
+LOCK_FILE = "/tmp/bot.lock"
+
+if os.path.exists(LOCK_FILE):
+    print("Bot already running. EXIT.")
+    sys.exit()
+
+with open(LOCK_FILE, "w") as f:
+    f.write("running")
+
+import atexit
+def cleanup():
+    if os.path.exists(LOCK_FILE):
+        os.remove(LOCK_FILE)
+atexit.register(cleanup)
 
 # 🔐 بيانات
 api_id = int(os.getenv("API_ID"))
@@ -26,18 +43,14 @@ def format_post(text):
 
     lines = text.strip().split("\n")
 
-    # أول سطر من المصدر
     first_line = lines[0].strip() if lines else ""
 
-    # السعر
     price_match = re.search(r"السعر\s*:\s*(\d+(?:\.\d+)?)", text)
     price = float(price_match.group(1)) + 4 if price_match else ""
 
-    # المقاس
     size_match = re.search(r"(?:المقاس|المقاسات|القياسات)\s*:\s*(.+)", text)
     size = size_match.group(1).strip() if size_match else ""
 
-    # الكود
     code_match = re.search(r"الكود\s*:\s*(.+)", text)
     code = code_match.group(1).strip() if code_match else ""
 
@@ -57,7 +70,7 @@ def format_post(text):
 https://wa.me/970595127374
 """
 
-# 🟡 أول تشغيل (24 ساعة - ترتيب صحيح)
+# 🟡 أول تشغيل (24 ساعة)
 async def first_run():
     print("Fetching last 24 hours...")
 
@@ -90,7 +103,6 @@ async def first_run():
 
     print("First run done ✅")
 
-
 # 🧠 لايف
 media_buffer = []
 waiting = False
@@ -122,8 +134,7 @@ async def handler(event):
         media_buffer = []
         waiting = False
 
-
-# 🚀 تشغيل (مرة واحدة فقط)
+# 🚀 تشغيل
 async def main():
     if not os.path.exists(FLAG_FILE):
         print("FIRST RUN 🔥")
@@ -139,7 +150,6 @@ async def main():
         print("Already ran before ✅")
 
     await client.run_until_disconnected()
-
 
 client.start()
 client.loop.run_until_complete(main())
