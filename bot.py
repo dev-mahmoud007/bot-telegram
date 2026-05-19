@@ -2,11 +2,10 @@ import os
 import sys
 import asyncio
 import re
-from datetime import datetime, timedelta, timezone
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
-# 🛑 منع تشغيل أكثر من نسخة (حل نهائي للـ crash)
+# 🛑 منع تشغيل أكثر من نسخة
 LOCK_FILE = "/tmp/bot.lock"
 
 if os.path.exists(LOCK_FILE):
@@ -32,9 +31,7 @@ client = TelegramClient(StringSession(string_session), api_id, api_hash)
 source_channel = "mulhim00"
 target_channel = "VeraFashionGaza"
 
-FLAG_FILE = "first_run_done.txt"
-
-print("FINAL PRO BOT 🔥")
+print("LIVE BOT RUNNING 🔥")
 
 # 🧠 تنسيق النص
 def format_post(text):
@@ -42,7 +39,6 @@ def format_post(text):
         return None
 
     lines = text.strip().split("\n")
-
     first_line = lines[0].strip() if lines else ""
 
     price_match = re.search(r"السعر\s*:\s*(\d+(?:\.\d+)?)", text)
@@ -70,36 +66,50 @@ def format_post(text):
 https://wa.me/970595127374
 """
 
-# 🟡 أول تشغيل (24 ساعة)
-async def first_run():
-    print("Fetching last 24 hours...")
+# 🧠 التخزين الذكي
+media_buffer = []
+waiting = False
+last_media_time = 0
 
-    since = datetime.now(timezone.utc) - timedelta(hours=48)
-    media_buffer = []
-    messages = []
+@client.on(events.NewMessage(chats=source_channel))
+async def handler(event):
+    global media_buffer, waiting, last_media_time
 
-    # 🔥 سحب سريع (من الجديد للقديم)
-    async for msg in client.iter_messages(source_channel):
-        if msg.date < since:
-            break
-        messages.append(msg)
+    msg = event.message
 
-    print(f"Fetched {len(messages)} messages")
+    # 📸 إذا وسائط
+    if msg.media:
+        media_buffer.append(msg.media)
+        waiting = True
+        last_media_time = asyncio.get_event_loop().time()
+        return
 
-    # 🔄 قلب الترتيب (قديم → جديد)
-    messages.reverse()
+    # 📝 إذا نص
+    if msg.text and waiting:
 
-    # 🧠 معالجة
-    for msg in messages:
+        # ⏳ انتظار اكتمال الوسائط
+        await asyncio.sleep(3)
 
-        if msg.media:
-            media_buffer.append(msg.media)
-            continue
+        now = asyncio.get_event_loop().time()
 
-        if msg.text and media_buffer:
-            text = format_post(msg.text)
+        if now - last_media_time < 2:
+            return
 
-            chunks = [media_buffer[i:i+10] for i in range(0, len(media_buffer), 10)]
+        text = format_post(msg.text)
+
+        # 🔥 تقسيم ذكي
+        photos = []
+        videos = []
+
+        for m in media_buffer:
+            if hasattr(m, 'photo') and m.photo:
+                photos.append(m)
+            else:
+                videos.append(m)
+
+        # 🖼 الصور (ألبوم)
+        if photos:
+            chunks = [photos[i:i+10] for i in range(0, len(photos), 10)]
 
             for i, chunk in enumerate(chunks):
                 if i == 0:
@@ -109,56 +119,20 @@ async def first_run():
 
                 await asyncio.sleep(2)
 
-            media_buffer = []
-
-    print("First run done ✅")
-
-# 🧠 لايف
-media_buffer = []
-waiting = False
-
-@client.on(events.NewMessage(chats=source_channel))
-async def handler(event):
-    global media_buffer, waiting
-
-    msg = event.message
-
-    if msg.media:
-        media_buffer.append(msg.media)
-        waiting = True
-        return
-
-    if msg.text and waiting:
-        text = format_post(msg.text)
-
-        chunks = [media_buffer[i:i+10] for i in range(0, len(media_buffer), 10)]
-
-        for i, chunk in enumerate(chunks):
-            if i == 0:
-                await client.send_file(target_channel, chunk, caption=text)
-            else:
-                await client.send_file(target_channel, chunk)
-
+        # 🎥 الفيديوهات
+        for v in videos:
+            await client.send_file(target_channel, v)
             await asyncio.sleep(2)
+
+        print(f"✅ Sent FULL album: {len(media_buffer)} media")
 
         media_buffer = []
         waiting = False
 
+
 # 🚀 تشغيل
 async def main():
-    if not os.path.exists(FLAG_FILE):
-        print("FIRST RUN 🔥")
-
-        await first_run()
-
-        with open(FLAG_FILE, "w") as f:
-            f.write("done")
-
-        print("Switching to LIVE...")
-
-    else:
-        print("Already ran before ✅")
-
+    print("Listening...")
     await client.run_until_disconnected()
 
 client.start()
