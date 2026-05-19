@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
+# 🔐 بيانات
 api_id = int(os.getenv("API_ID"))
 api_hash = os.getenv("API_HASH")
 string_session = os.getenv("STRING_SESSION")
@@ -16,7 +17,7 @@ target_channel = "VeraFashionGaza"
 
 FLAG_FILE = "first_run_done.txt"
 
-print("FINAL SAFE BOT 🔥")
+print("FINAL PRO BOT 🔥")
 
 # 🧠 تنسيق النص
 def format_post(text):
@@ -25,17 +26,14 @@ def format_post(text):
 
     lines = text.strip().split("\n")
 
-    # 🟡 أول سطر من المصدر
+    # أول سطر من المصدر
     first_line = lines[0].strip() if lines else ""
-
-    # باقي النص بدون أول سطر
-    rest_text = "\n".join(lines[1:])
 
     # السعر
     price_match = re.search(r"السعر\s*:\s*(\d+(?:\.\d+)?)", text)
     price = float(price_match.group(1)) + 4 if price_match else ""
 
-    # القياسات
+    # المقاس
     size_match = re.search(r"(?:المقاس|المقاسات|القياسات)\s*:\s*(.+)", text)
     size = size_match.group(1).strip() if size_match else ""
 
@@ -43,7 +41,6 @@ def format_post(text):
     code_match = re.search(r"الكود\s*:\s*(.+)", text)
     code = code_match.group(1).strip() if code_match else ""
 
-    # ✨ النص النهائي
     return f"""✨ فيرا فاشون | Vera Fashion 👗
 
 {first_line}
@@ -60,17 +57,17 @@ def format_post(text):
 https://wa.me/970595127374
 """
 
-# 🟡 أول تشغيل (بدون حذف)
+# 🟡 أول تشغيل (24 ساعة - ترتيب صحيح)
 async def first_run():
     print("Fetching last 24 hours...")
 
-    since = datetime.now(timezone.utc) - timedelta(hours=36)
+    since = datetime.now(timezone.utc) - timedelta(hours=24)
     media_buffer = []
 
     async for msg in client.iter_messages(source_channel, reverse=True):
 
         if msg.date < since:
-            continue  # تجاهل القديم
+            continue
 
         if msg.media:
             media_buffer.append(msg.media)
@@ -126,7 +123,7 @@ async def handler(event):
         waiting = False
 
 
-# 🚀 تشغيل ذكي (مرة واحدة فقط)
+# 🚀 تشغيل (مرة واحدة فقط)
 async def main():
     if not os.path.exists(FLAG_FILE):
         print("FIRST RUN 🔥")
