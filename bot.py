@@ -1,11 +1,10 @@
 import os
 import asyncio
 import re
+from datetime import datetime, timedelta, timezone
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from telethon.errors import FloodWaitError
 
-# 🔐 إعدادات
 api_id = int(os.getenv("API_ID"))
 api_hash = os.getenv("API_HASH")
 string_session = os.getenv("STRING_SESSION")
@@ -15,86 +14,120 @@ client = TelegramClient(StringSession(string_session), api_id, api_hash)
 source_channel = "mulhim00"
 target_channel = "VeraFashionGaza"
 
-print("STRICT Smart Bot running...")
+FLAG_FILE = "first_run_done.txt"
 
-# 🔥 تعديل السعر (يدعم 4 و 4.5)
-def increase_prices(text):
+print("FINAL SAFE BOT 🔥")
+
+# 🧠 تنسيق النص
+def format_post(text):
     if not text:
-        return text
+        return None
 
-    return re.sub(
-        r"(السعر\s*:\s*)(\d+(?:\.\d+)?)\$",
-        lambda m: f"{m.group(1)}{float(m.group(2)) + 4:g}$",
-        text
-    )
+    price_match = re.search(r"السعر\s*:\s*(\d+(?:\.\d+)?)", text)
+    price = float(price_match.group(1)) + 4 if price_match else ""
 
-# 🧠 تخزين الوسائط
-media_buffer = []
-waiting_for_text = False
+    size_match = re.search(r"(?:المقاس|المقاسات|القياسات)\s*:\s*(.+)", text)
+    size = size_match.group(1).strip() if size_match else ""
 
-@client.on(events.NewMessage(chats=source_channel))
-async def handler(event):
-    global media_buffer, waiting_for_text
+    code_match = re.search(r"الكود\s*:\s*(.+)", text)
+    code = code_match.group(1).strip() if code_match else ""
 
-    msg = event.message
+    return f"""✨ فيرا فاشون | Vera Fashion 👗
 
-    try:
-        # 📸 إذا وسائط → خزّن فقط
+الخامة: تركية مستوردة عالية الجودة 🇹🇷
+
+📏 المقاس: {size}
+💲 السعر: {price}$
+🏷 الكود: {code}
+
+🛍 لبيع الجملة فقط | Vera Fashion 🛒
+
+📲 لطلب الموديل يرجى التواصل مباشرة:
+https://wa.me/970595127374
+"""
+
+# 🟡 أول تشغيل (بدون حذف)
+async def first_run():
+    print("Fetching last 24 hours...")
+
+    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    media_buffer = []
+
+    async for msg in client.iter_messages(source_channel):
+        if msg.date < since:
+            break
+
         if msg.media:
             media_buffer.append(msg.media)
-            waiting_for_text = True
-            print(f"Collected media: {len(media_buffer)}")
-            return
+            continue
 
-        # 📝 إذا نص + عندنا وسائط
-        if msg.text and waiting_for_text:
-            text = increase_prices(msg.text)
+        if msg.text and media_buffer:
+            text = format_post(msg.text)
 
-            # ⏳ تأخير بسيط لضمان اكتمال الوسائط
-            await asyncio.sleep(2)
-
-            # 🔥 تقسيم الوسائط (حد Telegram = 10)
             chunks = [media_buffer[i:i+10] for i in range(0, len(media_buffer), 10)]
 
             for i, chunk in enumerate(chunks):
                 if i == 0:
-                    # أول دفعة مع النص
-                    await client.send_file(
-                        target_channel,
-                        chunk,
-                        caption=text
-                    )
+                    await client.send_file(target_channel, chunk, caption=text)
                 else:
-                    await client.send_file(
-                        target_channel,
-                        chunk
-                    )
+                    await client.send_file(target_channel, chunk)
 
                 await asyncio.sleep(2)
 
-            print(f"✅ Sent {len(media_buffer)} media with text")
-
-            # 🔄 إعادة تعيين
             media_buffer = []
-            waiting_for_text = False
-            return
 
-        # ❌ نص بدون وسائط → تجاهل
-        if msg.text and not waiting_for_text:
-            print("Ignored text بدون وسائط")
-            return
+    print("First run done ✅")
 
-    except FloodWaitError as e:
-        print(f"Flood wait: {e.seconds}")
-        await asyncio.sleep(e.seconds)
 
-    except Exception as e:
-        print("Error:", e)
+# 🧠 لايف
+media_buffer = []
+waiting = False
 
-# 🚀 تشغيل
+@client.on(events.NewMessage(chats=source_channel))
+async def handler(event):
+    global media_buffer, waiting
+
+    msg = event.message
+
+    if msg.media:
+        media_buffer.append(msg.media)
+        waiting = True
+        return
+
+    if msg.text and waiting:
+        text = format_post(msg.text)
+
+        chunks = [media_buffer[i:i+10] for i in range(0, len(media_buffer), 10)]
+
+        for i, chunk in enumerate(chunks):
+            if i == 0:
+                await client.send_file(target_channel, chunk, caption=text)
+            else:
+                await client.send_file(target_channel, chunk)
+
+            await asyncio.sleep(2)
+
+        media_buffer = []
+        waiting = False
+
+
+# 🚀 تشغيل ذكي (مرة واحدة فقط)
 async def main():
-    print("Listening...")
+    if not os.path.exists(FLAG_FILE):
+        print("FIRST RUN 🔥")
+
+        await first_run()
+
+        with open(FLAG_FILE, "w") as f:
+            f.write("done")
+
+        print("Switching to LIVE...")
+
+    else:
+        print("Already ran before ✅")
+
     await client.run_until_disconnected()
+
 
 client.start()
 client.loop.run_until_complete(main())
