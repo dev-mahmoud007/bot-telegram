@@ -76,11 +76,21 @@ async def first_run():
 
     since = datetime.now(timezone.utc) - timedelta(hours=36)
     media_buffer = []
+    messages = []
 
-    async for msg in client.iter_messages(source_channel, reverse=True):
-
+    # 🔥 سحب سريع (من الجديد للقديم)
+    async for msg in client.iter_messages(source_channel):
         if msg.date < since:
-            continue
+            break
+        messages.append(msg)
+
+    print(f"Fetched {len(messages)} messages")
+
+    # 🔄 قلب الترتيب (قديم → جديد)
+    messages.reverse()
+
+    # 🧠 معالجة
+    for msg in messages:
 
         if msg.media:
             media_buffer.append(msg.media)
