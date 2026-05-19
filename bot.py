@@ -64,12 +64,13 @@ https://wa.me/970595127374
 async def first_run():
     print("Fetching last 24 hours...")
 
-    since = datetime.now(timezone.utc) - timedelta(hours=36)
+    since = datetime.now(timezone.utc) - timedelta(hours=24)
     media_buffer = []
 
-    async for msg in client.iter_messages(source_channel):
+    async for msg in client.iter_messages(source_channel, reverse=True):
+
         if msg.date < since:
-            break
+            continue  # تجاهل القديم
 
         if msg.media:
             media_buffer.append(msg.media)
