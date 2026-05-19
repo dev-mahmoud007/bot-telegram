@@ -61,7 +61,7 @@ https://wa.me/970595127374
 async def first_run():
     print("Fetching last 24 hours...")
 
-    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    since = datetime.now(timezone.utc) - timedelta(hours=36)
     media_buffer = []
 
     async for msg in client.iter_messages(source_channel, reverse=True):
