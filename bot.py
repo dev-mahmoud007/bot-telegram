@@ -13,7 +13,7 @@ async def fetch_from_specific_post():
 
         if msg.text and TARGET_CODE in msg.text:
 
-            # 🎯 تحقق من التاريخ
+            # 🎯 تحقق من التاريخ laaa
             msg_date = msg.date.date()  # بدون وقت
 
             if msg_date == datetime(2026, 5, 19).date():
