@@ -1,32 +1,38 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 TARGET_CODE = "EYYY"
 
 async def fetch_from_specific_post():
-    print("Searching for target post (code + date)...")
+    print("Searching smart (date + code)...")
 
     media_buffer = []
     messages = []
     found = False
 
+    start_date = datetime(2026, 5, 18, tzinfo=timezone.utc)
+    end_date = datetime(2026, 5, 20, tzinfo=timezone.utc)
+
     async for msg in client.iter_messages(source_channel):
 
+        # ⛔ وقف إذا طلعنا برا النطاق
+        if msg.date < start_date:
+            break
+
+        # تجاهل إذا أكبر من النطاق
+        if msg.date > end_date:
+            continue
+
         if msg.text and TARGET_CODE in msg.text:
-
-            # 🎯 تحقق من التاريخ laaa
-            msg_date = msg.date.date()  # بدون وقت
-
-            if msg_date == datetime(2026, 5, 19).date():
-                print("✅ Found exact post (code + date)")
-                found = True
-                start_id = msg.id
-                break
+            print("✅ Found exact post")
+            found = True
+            start_id = msg.id
+            break
 
     if not found:
-        print("❌ Target post not found")
+        print("❌ Not found in date range")
         return
 
-    # 🔥 سحب من هذه النقطة
+    # 🔥 سحب من النقطة
     async for msg in client.iter_messages(source_channel, min_id=start_id):
         messages.append(msg)
 
@@ -41,30 +47,10 @@ async def fetch_from_specific_post():
         if msg.text and media_buffer:
             text = format_post(msg.text)
 
-            photos = []
-            videos = []
+            await send_post(media_buffer, text)
 
-            for m in media_buffer:
-                if hasattr(m, 'photo') and m.photo:
-                    photos.append(m)
-                else:
-                    videos.append(m)
-
-            if photos:
-                chunks = [photos[i:i+10] for i in range(0, len(photos), 10)]
-                for i, chunk in enumerate(chunks):
-                    if i == 0:
-                        await client.send_file(target_channel, chunk, caption=text)
-                    else:
-                        await client.send_file(target_channel, chunk)
-                    await asyncio.sleep(2)
-
-            for v in videos:
-                await client.send_file(target_channel, v)
-                await asyncio.sleep(2)
-
-            print(f"Sent batch: {len(media_buffer)}")
+            print(f"Sent: {len(media_buffer)}")
 
             media_buffer = []
 
-    print("Done fetching from exact post ✅")
+    print("Done ✅")
