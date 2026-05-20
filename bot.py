@@ -2,7 +2,6 @@ import os
 import sys
 import asyncio
 import re
-from datetime import datetime, timezone
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
@@ -34,9 +33,32 @@ client = TelegramClient(StringSession(string_session), api_id, api_hash)
 source_channel = "mulhim00"
 target_channel = "VeraFashionGaza"
 
-FLAG_FILE = "start_done.txt"
-
 print("CONFIG LOADED ✅")
+
+# 🧠 ذاكرة مؤقتة (تحمي من التكرار لو الملف انمسح)
+last_id_cache = 0
+
+# 📁 تحميل ID
+def load_last_id():
+    global last_id_cache
+    try:
+        with open("last_id.txt", "r") as f:
+            last_id_cache = int(f.read().strip())
+            print(f"Loaded last_id: {last_id_cache}")
+            return last_id_cache
+    except:
+        print("No last_id file → start fresh")
+        return 0
+
+# 💾 حفظ ID
+def save_last_id(msg_id):
+    global last_id_cache
+    last_id_cache = msg_id
+
+    with open("last_id.txt", "w") as f:
+        f.write(str(msg_id))
+
+    print(f"Saved last_id → {msg_id}")
 
 # 🧠 تنسيق النص
 def format_post(text):
@@ -72,7 +94,7 @@ https://wa.me/970595127374
 """
 
 # 📦 إرسال ذكي
-async def send_post(media_buffer, text):
+async def send_post(media_buffer, text, last_msg_id):
     photos = []
     videos = []
 
@@ -82,7 +104,7 @@ async def send_post(media_buffer, text):
         else:
             videos.append(m)
 
-    # صور
+    # صور (ألبوم)
     if photos:
         chunks = [photos[i:i+10] for i in range(0, len(photos), 10)]
         for i, chunk in enumerate(chunks):
@@ -97,66 +119,41 @@ async def send_post(media_buffer, text):
         await client.send_file(target_channel, v)
         await asyncio.sleep(2)
 
+    # حفظ ID
+    save_last_id(last_msg_id)
 
-# 🎯 إعدادات البحث
-TARGET_CODE = "EYYY"
-TARGET_DATE = datetime(2026, 5, 19).date()
+# 🔄 تعويض ذكي
+async def smart_catchup():
+    print("SMART CATCHUP 🔄")
 
-# 🔍 البحث الذكي
-async def fetch_from_target():
-    print("SEARCHING TARGET...")
+    last_id = load_last_id()
 
-    media_buffer = []
-    messages = []
-    found = False
-
-    start_range = datetime(2026, 5, 18, tzinfo=timezone.utc)
-    end_range = datetime(2026, 5, 20, tzinfo=timezone.utc)
-
-    async for msg in client.iter_messages(source_channel):
-
-        if msg.date < start_range:
-            break
-
-        if msg.date > end_range:
-            continue
-
-        if msg.text and TARGET_CODE in msg.text:
-
-            if msg.date.date() == TARGET_DATE:
-                print("✅ TARGET FOUND")
-                start_id = msg.id
-                found = True
-                break
-
-    if not found:
-        print("❌ TARGET NOT FOUND")
+    if last_id == 0:
+        print("First run → skip catchup")
         return
 
-    print("FETCHING AFTER TARGET...")
+    media_buffer = []
 
-    async for msg in client.iter_messages(source_channel, min_id=start_id):
-        messages.append(msg)
+    async for msg in client.iter_messages(source_channel, min_id=last_id):
 
-    messages.reverse()
-
-    for msg in messages:
+        # حماية من التكرار
+        if msg.id <= last_id_cache:
+            continue
 
         if msg.media:
-            media_buffer.append(msg.media)
+            media_buffer.append(msg)
             continue
 
         if msg.text and media_buffer:
             text = format_post(msg.text)
 
-            await send_post(media_buffer, text)
+            await send_post(media_buffer, text, msg.id)
 
-            print(f"Sent batch: {len(media_buffer)}")
+            print(f"Recovered: {len(media_buffer)}")
 
             media_buffer = []
 
-    print("DONE FETCH ✅")
-
+    print("Catchup done ✅")
 
 # 🧠 لايف
 media_buffer = []
@@ -170,7 +167,7 @@ async def handler(event):
     msg = event.message
 
     if msg.media:
-        media_buffer.append(msg.media)
+        media_buffer.append(msg)
         waiting = True
         last_media_time = asyncio.get_event_loop().time()
         return
@@ -184,36 +181,22 @@ async def handler(event):
 
         text = format_post(msg.text)
 
-        await send_post(media_buffer, text)
+        await send_post(media_buffer, text, msg.id)
 
         print(f"LIVE sent: {len(media_buffer)}")
 
         media_buffer = []
         waiting = False
 
-
 # 🚀 تشغيل
 async def main():
     print("ENTER MAIN")
 
-    if not os.path.exists(FLAG_FILE):
-        try:
-            await fetch_from_target()
-        except Exception as e:
-            print("ERROR:", e)
-
-        with open(FLAG_FILE, "w") as f:
-            f.write("done")
-
-        print("SWITCH TO LIVE")
-
-    else:
-        print("SKIP FETCH")
+    await smart_catchup()
 
     print("LISTENING 🔥")
 
     await client.run_until_disconnected()
-
 
 client.start()
 client.loop.run_until_complete(main())
