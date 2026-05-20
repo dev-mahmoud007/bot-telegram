@@ -2,6 +2,7 @@ import os
 import sys
 import asyncio
 import re
+from datetime import datetime, timedelta, timezone
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
@@ -31,7 +32,9 @@ client = TelegramClient(StringSession(string_session), api_id, api_hash)
 source_channel = "mulhim00"
 target_channel = "VeraFashionGaza"
 
-print("LIVE BOT RUNNING 🔥")
+FLAG_FILE = "fetched_once.txt"
+
+print("SMART BOT RUNNING 🔥")
 
 # 🧠 تنسيق النص
 def format_post(text):
@@ -66,7 +69,56 @@ def format_post(text):
 https://wa.me/970595127374
 """
 
-# 🧠 التخزين الذكي
+# 🟡 سحب مرة واحدة (11 ساعة)
+async def fetch_last_hours(hours=11):
+    print(f"Fetching last {hours} hours...")
+
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    media_buffer = []
+
+    async for msg in client.iter_messages(source_channel):
+        if msg.date < since:
+            break
+
+        if msg.media:
+            media_buffer.append(msg.media)
+            continue
+
+        if msg.text and media_buffer:
+            text = format_post(msg.text)
+
+            photos = []
+            videos = []
+
+            for m in media_buffer:
+                if hasattr(m, 'photo') and m.photo:
+                    photos.append(m)
+                else:
+                    videos.append(m)
+
+            # صور
+            if photos:
+                chunks = [photos[i:i+10] for i in range(0, len(photos), 10)]
+                for i, chunk in enumerate(chunks):
+                    if i == 0:
+                        await client.send_file(target_channel, chunk, caption=text)
+                    else:
+                        await client.send_file(target_channel, chunk)
+                    await asyncio.sleep(2)
+
+            # فيديو
+            for v in videos:
+                await client.send_file(target_channel, v)
+                await asyncio.sleep(2)
+
+            print(f"Sent old batch: {len(media_buffer)}")
+
+            media_buffer = []
+
+    print("Done fetching ✅")
+
+
+# 🧠 لايف
 media_buffer = []
 waiting = False
 last_media_time = 0
@@ -77,27 +129,21 @@ async def handler(event):
 
     msg = event.message
 
-    # 📸 إذا وسائط
     if msg.media:
         media_buffer.append(msg.media)
         waiting = True
         last_media_time = asyncio.get_event_loop().time()
         return
 
-    # 📝 إذا نص
     if msg.text and waiting:
-
-        # ⏳ انتظار اكتمال الوسائط
         await asyncio.sleep(3)
 
         now = asyncio.get_event_loop().time()
-
         if now - last_media_time < 2:
             return
 
         text = format_post(msg.text)
 
-        # 🔥 تقسيم ذكي
         photos = []
         videos = []
 
@@ -107,33 +153,42 @@ async def handler(event):
             else:
                 videos.append(m)
 
-        # 🖼 الصور (ألبوم)
         if photos:
             chunks = [photos[i:i+10] for i in range(0, len(photos), 10)]
-
             for i, chunk in enumerate(chunks):
                 if i == 0:
                     await client.send_file(target_channel, chunk, caption=text)
                 else:
                     await client.send_file(target_channel, chunk)
-
                 await asyncio.sleep(2)
 
-        # 🎥 الفيديوهات
         for v in videos:
             await client.send_file(target_channel, v)
             await asyncio.sleep(2)
 
-        print(f"✅ Sent FULL album: {len(media_buffer)} media")
+        print(f"✅ Sent LIVE album: {len(media_buffer)}")
 
         media_buffer = []
         waiting = False
 
 
-# 🚀 تشغيل
+# 🚀 تشغيل ذكي
 async def main():
-    print("Listening...")
+    if not os.path.exists(FLAG_FILE):
+        print("FIRST TIME FETCH 🔥")
+
+        await fetch_last_hours(11)
+
+        with open(FLAG_FILE, "w") as f:
+            f.write("done")
+
+        print("Switching to LIVE...")
+
+    else:
+        print("Already fetched before ✅")
+
     await client.run_until_disconnected()
+
 
 client.start()
 client.loop.run_until_complete(main())
