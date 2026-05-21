@@ -35,10 +35,9 @@ target_channel = "VeraFashionGaza"
 
 print("CONFIG LOADED ✅")
 
-# 🧠 ذاكرة مؤقتة (تحمي من التكرار لو الملف انمسح)
+# 📁 تخزين ID
 last_id_cache = 0
 
-# 📁 تحميل ID
 def load_last_id():
     global last_id_cache
     try:
@@ -50,7 +49,6 @@ def load_last_id():
         print("No last_id file → start fresh")
         return 0
 
-# 💾 حفظ ID
 def save_last_id(msg_id):
     global last_id_cache
     last_id_cache = msg_id
@@ -59,6 +57,9 @@ def save_last_id(msg_id):
         f.write(str(msg_id))
 
     print(f"Saved last_id → {msg_id}")
+
+# 🛡 منع تكرار نفس المجموعة
+last_sent_group_id = 0
 
 # 🧠 تنسيق النص
 def format_post(text):
@@ -95,6 +96,13 @@ https://wa.me/970595127374
 
 # 📦 إرسال ذكي
 async def send_post(media_buffer, text, last_msg_id):
+    global last_sent_group_id
+
+    # 🚨 منع التكرار
+    if last_msg_id == last_sent_group_id:
+        print("Duplicate prevented ❌")
+        return
+
     photos = []
     videos = []
 
@@ -119,7 +127,8 @@ async def send_post(media_buffer, text, last_msg_id):
         await client.send_file(target_channel, v)
         await asyncio.sleep(2)
 
-    # حفظ ID
+    # ✅ تسجيل
+    last_sent_group_id = last_msg_id
     save_last_id(last_msg_id)
 
 # 🔄 تعويض ذكي
@@ -129,14 +138,13 @@ async def smart_catchup():
     last_id = load_last_id()
 
     if last_id == 0:
-        print("First run → skip catchup")
+        print("First run → skip")
         return
 
     media_buffer = []
 
     async for msg in client.iter_messages(source_channel, min_id=last_id):
 
-        # حماية من التكرار
         if msg.id <= last_id_cache:
             continue
 
@@ -165,6 +173,10 @@ async def handler(event):
     global media_buffer, waiting, last_media_time
 
     msg = event.message
+
+    # تجاهل القديم
+    if msg.id <= last_id_cache:
+        return
 
     if msg.media:
         media_buffer.append(msg)
