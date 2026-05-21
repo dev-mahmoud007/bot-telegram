@@ -201,7 +201,7 @@ async def main():
 
     asyncio.create_task(sender())
 
-    await fetch_last_hour()  # 👈 مرة واحدة
+#    await fetch_last_hour()  # 👈 مرة واحدة
 
     print("🔥 LIVE MODE")
 
