@@ -119,12 +119,6 @@ last_media_time = 0
 async def fetch_last_hour():
     print("🕒 Fetching last 1 hour...")
 
-    last_id = load_last_id()
-
-    if last_id != 0:
-        print("Already initialized → skip fetch")
-        return
-
     since = datetime.now(timezone.utc) - timedelta(hours=1)
 
     temp = []
