@@ -4,24 +4,21 @@ import asyncio
 import re
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
+from telethon.errors import FloodWaitError
 
-print("BOT STARTED 🔥")
+print("🚀 COMMERCIAL BOT STARTED")
 
-# 🛑 منع تشغيل أكثر من نسخة
+# 🛑 منع تعدد التشغيل
 LOCK_FILE = "/tmp/bot.lock"
-
 if os.path.exists(LOCK_FILE):
-    print("Bot already running. EXIT.")
+    print("Already running ❌")
     sys.exit()
 
 with open(LOCK_FILE, "w") as f:
     f.write("running")
 
 import atexit
-def cleanup():
-    if os.path.exists(LOCK_FILE):
-        os.remove(LOCK_FILE)
-atexit.register(cleanup)
+atexit.register(lambda: os.remove(LOCK_FILE) if os.path.exists(LOCK_FILE) else None)
 
 # 🔐 بيانات
 api_id = int(os.getenv("API_ID"))
@@ -33,8 +30,6 @@ client = TelegramClient(StringSession(string_session), api_id, api_hash)
 source_channel = "mulhim00"
 target_channel = "VeraFashionGaza"
 
-print("CONFIG LOADED ✅")
-
 # 📁 تخزين ID
 last_id_cache = 0
 
@@ -43,105 +38,89 @@ def load_last_id():
     try:
         with open("last_id.txt", "r") as f:
             last_id_cache = int(f.read().strip())
-            print(f"Loaded last_id: {last_id_cache}")
-            return last_id_cache
     except:
-        print("No last_id file → start fresh")
-        return 0
+        last_id_cache = 0
+    return last_id_cache
 
-def save_last_id(msg_id):
+def save_last_id(mid):
     global last_id_cache
-    last_id_cache = msg_id
-
+    last_id_cache = mid
     with open("last_id.txt", "w") as f:
-        f.write(str(msg_id))
-
-    print(f"Saved last_id → {msg_id}")
-
-# 🛡 منع تكرار نفس المجموعة
-last_sent_group_id = 0
+        f.write(str(mid))
 
 # 🧠 تنسيق النص
 def format_post(text):
     if not text:
         return None
 
-    lines = text.strip().split("\n")
-    first_line = lines[0].strip() if lines else ""
+    first_line = text.strip().split("\n")[0]
 
-    price_match = re.search(r"السعر\s*:\s*(\d+(?:\.\d+)?)", text)
-    price = float(price_match.group(1)) + 4 if price_match else ""
+    price = re.search(r"السعر\s*:\s*(\d+(?:\.\d+)?)", text)
+    price = float(price.group(1)) + 4 if price else ""
 
-    size_match = re.search(r"(?:المقاس|المقاسات|القياسات)\s*:\s*(.+)", text)
-    size = size_match.group(1).strip() if size_match else ""
+    size = re.search(r"(?:المقاس|المقاسات|القياسات)\s*:\s*(.+)", text)
+    size = size.group(1).strip() if size else ""
 
-    code_match = re.search(r"الكود\s*:\s*(.+)", text)
-    code = code_match.group(1).strip() if code_match else ""
+    code = re.search(r"الكود\s*:\s*(.+)", text)
+    code = code.group(1).strip() if code else ""
 
     return f"""✨ فيرا فاشون | Vera Fashion 👗
 
 {first_line}
 
-الخامة: تركية مستوردة عالية الجودة 🇹🇷
+الخامة: تركية مستوردة 🇹🇷
 
 📏 المقاس: {size}
 💲 السعر: {price}$
 🏷 الكود: {code}
 
-🛍 لبيع الجملة فقط | Vera Fashion 🛒
+🛍 بيع جملة فقط
 
-📲 لطلب الموديل يرجى التواصل مباشرة:
-https://wa.me/970595127374
+📲 https://wa.me/970595127374
 """
 
-# 📦 إرسال ذكي
-async def send_post(media_buffer, text, last_msg_id):
-    global last_sent_group_id
+# 🧠 Queue
+send_queue = asyncio.Queue()
 
-    # 🚨 منع التكرار
-    if last_msg_id == last_sent_group_id:
-        print("Duplicate prevented ❌")
-        return
+# 📦 إرسال احترافي
+async def sender_worker():
+    while True:
+        media_buffer, text, msg_id = await send_queue.get()
 
-    photos = []
-    videos = []
+        for attempt in range(3):
+            try:
+                await client.send_file(
+                    target_channel,
+                    [m.media for m in media_buffer],
+                    caption=text
+                )
 
-    for m in media_buffer:
-        if hasattr(m, 'photo') and m.photo:
-            photos.append(m)
-        else:
-            videos.append(m)
+                save_last_id(msg_id)
+                print(f"✅ Sent: {len(media_buffer)} items")
 
-    # صور (ألبوم)
-    if photos:
-        chunks = [photos[i:i+10] for i in range(0, len(photos), 10)]
-        for i, chunk in enumerate(chunks):
-            if i == 0:
-                await client.send_file(target_channel, chunk, caption=text)
-            else:
-                await client.send_file(target_channel, chunk)
-            await asyncio.sleep(2)
+                break
 
-    # فيديو
-    for v in videos:
-        await client.send_file(target_channel, v)
-        await asyncio.sleep(2)
+            except FloodWaitError as e:
+                print(f"⏳ FloodWait {e.seconds}s")
+                await asyncio.sleep(e.seconds)
 
-    # ✅ تسجيل
-    last_sent_group_id = last_msg_id
-    save_last_id(last_msg_id)
+            except Exception as e:
+                print("Retry...", e)
+                await asyncio.sleep(2)
+
+        send_queue.task_done()
+
+# 🧠 buffer ذكي
+media_buffer = []
 
 # 🔄 تعويض ذكي
 async def smart_catchup():
-    print("SMART CATCHUP 🔄")
+    print("🔄 Catchup...")
 
     last_id = load_last_id()
-
     if last_id == 0:
-        print("First run → skip")
+        print("First run skip")
         return
-
-    media_buffer = []
 
     async for msg in client.iter_messages(source_channel, min_id=last_id):
 
@@ -155,54 +134,39 @@ async def smart_catchup():
         if msg.text and media_buffer:
             text = format_post(msg.text)
 
-            await send_post(media_buffer, text, msg.id)
+            await send_queue.put((media_buffer.copy(), text, msg.id))
+            media_buffer.clear()
 
-            print(f"Recovered: {len(media_buffer)}")
+    print("✅ Catchup done")
 
-            media_buffer = []
-
-    print("Catchup done ✅")
-
-# 🧠 لايف
-media_buffer = []
-waiting = False
-last_media_time = 0
-
+# ⚡ لايف
 @client.on(events.NewMessage(chats=source_channel))
 async def handler(event):
-    global media_buffer, waiting, last_media_time
-
     msg = event.message
 
-    # تجاهل القديم
     if msg.id <= last_id_cache:
         return
 
+    global media_buffer
+
     if msg.media:
         media_buffer.append(msg)
-        waiting = True
-        last_media_time = asyncio.get_event_loop().time()
         return
 
-    if msg.text and waiting:
-        await asyncio.sleep(3)
-
-        now = asyncio.get_event_loop().time()
-        if now - last_media_time < 2:
-            return
+    if msg.text and media_buffer:
+        await asyncio.sleep(2)
 
         text = format_post(msg.text)
 
-        await send_post(media_buffer, text, msg.id)
+        await send_queue.put((media_buffer.copy(), text, msg.id))
 
-        print(f"LIVE sent: {len(media_buffer)}")
-
-        media_buffer = []
-        waiting = False
+        media_buffer.clear()
 
 # 🚀 تشغيل
 async def main():
     print("ENTER MAIN")
+
+    asyncio.create_task(sender_worker())
 
     await smart_catchup()
 
