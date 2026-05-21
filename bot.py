@@ -2,12 +2,11 @@ import os
 import sys
 import asyncio
 import re
-from datetime import datetime, timedelta, timezone
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError
 
-print("🚀 FINAL BOT (1H + LIVE + SAFE)")
+print("🚀 STABLE FINAL BOT")
 
 # 🛑 منع تشغيل نسختين
 LOCK_FILE = "/tmp/bot.lock"
@@ -48,6 +47,23 @@ def save_last_id(mid):
     last_id_cache = mid
     with open("last_id.txt", "w") as f:
         f.write(str(mid))
+
+# 🔥 إصلاح تلقائي
+async def fix_last_id():
+    global last_id_cache
+
+    load_last_id()
+
+    async for msg in client.iter_messages(source_channel, limit=1):
+        real_last = msg.id
+
+    print("LAST_ID:", last_id_cache)
+    print("REAL_LAST:", real_last)
+
+    # ❗ إذا last_id غلط (أكبر من الحقيقي)
+    if last_id_cache > real_last:
+        print("⚠️ FIXING LAST_ID...")
+        save_last_id(real_last - 10)
 
 # 🧠 تنسيق النص
 def format_post(text):
@@ -111,13 +127,10 @@ async def sender():
 
         send_queue.task_done()
 
-# 🧠 buffer
+# 🧠 buffer ذكي
 media_buffer = []
 last_media_time = 0
 
-
-
-# ⚡ لايف ذكي
 @client.on(events.NewMessage(chats=source_channel))
 async def handler(event):
     global media_buffer, last_media_time
@@ -132,19 +145,13 @@ async def handler(event):
     if msg.media:
         media_buffer.append(msg)
         last_media_time = now
-        print(f"📦 Media ({len(media_buffer)})")
         return
 
     if msg.text:
-        print("📝 Text detected")
-
-        # إذا ما في وسائط
         if not media_buffer:
             text = format_post(msg.text)
             await send_queue.put(([], text, msg.id))
             return
-
-        print("⏳ Waiting media...")
 
         start = asyncio.get_event_loop().time()
 
@@ -156,37 +163,20 @@ async def handler(event):
                 break
 
             if now - start > 5:
-                print("⚠️ Timeout")
                 break
 
         text = format_post(msg.text)
 
         await send_queue.put((media_buffer.copy(), text, msg.id))
-        print(f"🚀 Sent batch ({len(media_buffer)})")
-
         media_buffer.clear()
-async def check_last_msg():
-    async for msg in client.iter_messages(source_channel, limit=1):
-        print("SOURCE LAST MSG ID:", msg.id)
-        
-async def fix_last_id():
-    async for msg in client.iter_messages(source_channel, limit=1):
-        real_last = msg.id
-
-    if last_id_cache > real_last:
-        print("⚠️ FIXING LAST_ID")
-        save_last_id(real_last - 10)
 
 # 🚀 تشغيل
 async def main():
     print("ENTER MAIN")
-    await fix_last_id()
-    
-    await check_last_msg()
+
+    await fix_last_id()  # 🔥 أهم سطر
 
     asyncio.create_task(sender())
-
-   print("LAST_ID:", load_last_id())
 
     print("🔥 LIVE MODE")
 
