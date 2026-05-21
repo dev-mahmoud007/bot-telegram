@@ -168,16 +168,25 @@ async def handler(event):
 async def check_last_msg():
     async for msg in client.iter_messages(source_channel, limit=1):
         print("SOURCE LAST MSG ID:", msg.id)
+        
+async def fix_last_id():
+    async for msg in client.iter_messages(source_channel, limit=1):
+        real_last = msg.id
+
+    if last_id_cache > real_last:
+        print("⚠️ FIXING LAST_ID")
+        save_last_id(real_last - 10)
 
 # 🚀 تشغيل
 async def main():
     print("ENTER MAIN")
-    print("LAST_ID:", load_last_id())
+    await fix_last_id()
+    
     await check_last_msg()
 
     asyncio.create_task(sender())
 
-
+   print("LAST_ID:", load_last_id())
 
     print("🔥 LIVE MODE")
 
