@@ -115,36 +115,7 @@ async def sender():
 media_buffer = []
 last_media_time = 0
 
-# 🔥 سحب آخر ساعة (مرة واحدة فقط)
-async def fetch_last_hour():
-    print("🕒 Fetching last 1 hour...")
 
-    since = datetime.now(timezone.utc) - timedelta(hours=1)
-
-    temp = []
-
-    async for msg in client.iter_messages(source_channel):
-        if msg.date < since:
-            break
-        temp.append(msg)
-
-    temp.reverse()
-
-    for msg in temp:
-        if msg.media:
-            media_buffer.append(msg)
-            continue
-
-        if msg.text:
-            text = format_post(msg.text)
-
-            if media_buffer:
-                await send_queue.put((media_buffer.copy(), text, msg.id))
-                media_buffer.clear()
-            else:
-                await send_queue.put(([], text, msg.id))
-
-    print("✅ Initial fetch done")
 
 # ⚡ لايف ذكي
 @client.on(events.NewMessage(chats=source_channel))
@@ -194,14 +165,19 @@ async def handler(event):
         print(f"🚀 Sent batch ({len(media_buffer)})")
 
         media_buffer.clear()
+async def check_last_msg():
+    async for msg in client.iter_messages(source_channel, limit=1):
+        print("SOURCE LAST MSG ID:", msg.id)
 
 # 🚀 تشغيل
 async def main():
     print("ENTER MAIN")
+    print("LAST_ID:", load_last_id())
+    await check_last_msg()
 
     asyncio.create_task(sender())
 
-#    await fetch_last_hour()  # 👈 مرة واحدة
+
 
     print("🔥 LIVE MODE")
 
