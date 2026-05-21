@@ -2,13 +2,14 @@ import os
 import sys
 import asyncio
 import re
+from datetime import datetime, timedelta, timezone
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError
 
-print("🚀 SMART LIVE BOT (NO MEDIA SPLIT)")
+print("🚀 FINAL BOT (1H + LIVE + SAFE)")
 
-# 🛑 منع تشغيل أكثر من نسخة
+# 🛑 منع تشغيل نسختين
 LOCK_FILE = "/tmp/bot.lock"
 if os.path.exists(LOCK_FILE):
     print("Already running ❌")
@@ -110,56 +111,103 @@ async def sender():
 
         send_queue.task_done()
 
-# 🧠 buffer ذكي
+# 🧠 buffer
 media_buffer = []
 last_media_time = 0
 
-# ⚡ لايف مع انتظار ذكي
+# 🔥 سحب آخر ساعة (مرة واحدة فقط)
+async def fetch_last_hour():
+    print("🕒 Fetching last 1 hour...")
+
+    last_id = load_last_id()
+
+    if last_id != 0:
+        print("Already initialized → skip fetch")
+        return
+
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+
+    temp = []
+
+    async for msg in client.iter_messages(source_channel):
+        if msg.date < since:
+            break
+        temp.append(msg)
+
+    temp.reverse()
+
+    for msg in temp:
+        if msg.media:
+            media_buffer.append(msg)
+            continue
+
+        if msg.text:
+            text = format_post(msg.text)
+
+            if media_buffer:
+                await send_queue.put((media_buffer.copy(), text, msg.id))
+                media_buffer.clear()
+            else:
+                await send_queue.put(([], text, msg.id))
+
+    print("✅ Initial fetch done")
+
+# ⚡ لايف ذكي
 @client.on(events.NewMessage(chats=source_channel))
 async def handler(event):
     global media_buffer, last_media_time
 
     msg = event.message
 
-    if msg.id <= load_last_id():
+    if msg.id <= last_id_cache:
         return
 
     now = asyncio.get_event_loop().time()
 
-    # 🟢 إذا وسائط
     if msg.media:
         media_buffer.append(msg)
         last_media_time = now
-        print(f"📦 Media added ({len(media_buffer)})")
+        print(f"📦 Media ({len(media_buffer)})")
         return
 
-    # 🟢 إذا نص
     if msg.text:
-        print("📝 Text detected → waiting for media...")
+        print("📝 Text detected")
 
-        # 🔥 انتظر لين تخلص الوسائط فعليًا
+        # إذا ما في وسائط
+        if not media_buffer:
+            text = format_post(msg.text)
+            await send_queue.put(([], text, msg.id))
+            return
+
+        print("⏳ Waiting media...")
+
+        start = asyncio.get_event_loop().time()
+
         while True:
             await asyncio.sleep(1)
-            if asyncio.get_event_loop().time() - last_media_time > 2:
+            now = asyncio.get_event_loop().time()
+
+            if now - last_media_time > 2:
+                break
+
+            if now - start > 5:
+                print("⚠️ Timeout")
                 break
 
         text = format_post(msg.text)
 
-        if media_buffer:
-            await send_queue.put((media_buffer.copy(), text, msg.id))
-            print(f"🚀 Sent FULL batch ({len(media_buffer)})")
-            media_buffer.clear()
-        else:
-            await send_queue.put(([], text, msg.id))
-            print("🚀 Sent text only")
+        await send_queue.put((media_buffer.copy(), text, msg.id))
+        print(f"🚀 Sent batch ({len(media_buffer)})")
+
+        media_buffer.clear()
 
 # 🚀 تشغيل
 async def main():
     print("ENTER MAIN")
 
-    load_last_id()
-
     asyncio.create_task(sender())
+
+    await fetch_last_hour()  # 👈 مرة واحدة
 
     print("🔥 LIVE MODE")
 
