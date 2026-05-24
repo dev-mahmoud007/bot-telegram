@@ -2,16 +2,16 @@ import os
 import sys
 import asyncio
 import re
+from datetime import datetime, timezone
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError
 
-print("🚀 STABLE FINAL BOT")
+print("🚀 RESET 24 MAY + LIVE BOT")
 
 # 🛑 منع تشغيل نسختين
 LOCK_FILE = "/tmp/bot.lock"
 if os.path.exists(LOCK_FILE):
-    print("Already running ❌")
     sys.exit()
 
 with open(LOCK_FILE, "w") as f:
@@ -20,7 +20,7 @@ with open(LOCK_FILE, "w") as f:
 import atexit
 atexit.register(lambda: os.remove(LOCK_FILE) if os.path.exists(LOCK_FILE) else None)
 
-# 🔐 بيانات
+# 🔐
 api_id = int(os.getenv("API_ID"))
 api_hash = os.getenv("API_HASH")
 string_session = os.getenv("STRING_SESSION")
@@ -48,24 +48,7 @@ def save_last_id(mid):
     with open("last_id.txt", "w") as f:
         f.write(str(mid))
 
-# 🔥 إصلاح تلقائي
-async def fix_last_id():
-    global last_id_cache
-
-    load_last_id()
-
-    async for msg in client.iter_messages(source_channel, limit=1):
-        real_last = msg.id
-
-    print("LAST_ID:", last_id_cache)
-    print("REAL_LAST:", real_last)
-
-    # ❗ إذا last_id غلط (أكبر من الحقيقي)
-    if last_id_cache > real_last:
-        print("⚠️ FIXING LAST_ID...")
-        save_last_id(real_last - 10)
-
-# 🧠 تنسيق النص
+# 🧠 تنسيق
 def format_post(text):
     if not text:
         return None
@@ -99,96 +82,124 @@ def format_post(text):
 # 🧠 Queue
 send_queue = asyncio.Queue()
 
-# 📦 إرسال
+# 📦 إرسال (مع تقسيم 10)
 async def sender():
     while True:
         media, text, msg_id = await send_queue.get()
 
-        for _ in range(3):
-            try:
-                if media:
-                    # 🔥 تقسيم الوسائط
-                    chunks = [media[i:i+10] for i in range(0, len(media), 10)]
+        try:
+            if media:
+                chunks = [media[i:i+10] for i in range(0, len(media), 10)]
 
-                    for i, chunk in enumerate(chunks):
-                        files = [m.media for m in chunk]
+                for i, chunk in enumerate(chunks):
+                    files = [m.media for m in chunk]
 
-                        # ✨ النص فقط مع أول مجموعة
-                        if i == 0:
-                            await client.send_file(target_channel, files, caption=text)
-                        else:
-                            await client.send_file(target_channel, files)
+                    if i == 0:
+                        await client.send_file(target_channel, files, caption=text)
+                    else:
+                        await client.send_file(target_channel, files)
 
-                        await asyncio.sleep(1)  # مهم لتجنب flood
+                    await asyncio.sleep(1)
 
-                else:
-                    await client.send_message(target_channel, text)
+            else:
+                await client.send_message(target_channel, text)
 
-                save_last_id(msg_id)
-                print(f"✅ Sent: {msg_id}")
+            save_last_id(msg_id)
+            print("✅ Sent:", msg_id)
 
-                break
+        except FloodWaitError as e:
+            await asyncio.sleep(e.seconds)
 
-            except FloodWaitError as e:
-                print(f"⏳ FloodWait {e.seconds}")
-                await asyncio.sleep(e.seconds)
-
-            except Exception as e:
-                print("Retry:", e)
-                await asyncio.sleep(2)
+        except Exception as e:
+            print("Send error:", e)
 
         send_queue.task_done()
 
-# 🧠 buffer ذكي
+# 🔥 حذف + إعادة بناء (مرة واحدة فقط)
+async def reset_24_may():
+    if os.path.exists("reset_done.txt"):
+        print("⏭ Reset already done")
+        return
+
+    print("🗑 Deleting 24 May...")
+
+    start = datetime(2026, 5, 24, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 5, 24, 23, 59, tzinfo=timezone.utc)
+
+    # حذف
+    async for msg in client.iter_messages(target_channel):
+        if msg.date < start:
+            break
+
+        if start <= msg.date <= end:
+            await client.delete_messages(target_channel, msg.id)
+            await asyncio.sleep(0.3)
+
+    print("♻️ Reposting 24 May...")
+
+    temp = []
+    async for msg in client.iter_messages(source_channel):
+        if msg.date < start:
+            break
+        if start <= msg.date <= end:
+            temp.append(msg)
+
+    temp.reverse()
+
+    media_buffer = []
+
+    for msg in temp:
+        if msg.media:
+            media_buffer.append(msg)
+            continue
+
+        if msg.text:
+            text = format_post(msg.text)
+
+            if media_buffer:
+                await send_queue.put((media_buffer.copy(), text, msg.id))
+                media_buffer.clear()
+            else:
+                await send_queue.put(([], text, msg.id))
+
+    # علم إنه خلص
+    with open("reset_done.txt", "w") as f:
+        f.write("done")
+
+    print("✅ RESET DONE")
+
+# 🟢 لايف بسيط (صح)
 media_buffer = []
-last_media_time = 0
 
 @client.on(events.NewMessage(chats=source_channel))
 async def handler(event):
-    global media_buffer, last_media_time
-
     msg = event.message
 
     if msg.id <= last_id_cache:
         return
 
-    now = asyncio.get_event_loop().time()
-
     if msg.media:
         media_buffer.append(msg)
-        last_media_time = now
         return
 
     if msg.text:
-        if not media_buffer:
-            text = format_post(msg.text)
-            await send_queue.put(([], text, msg.id))
-            return
-
-        start = asyncio.get_event_loop().time()
-
-        while True:
-            await asyncio.sleep(1)
-            now = asyncio.get_event_loop().time()
-
-            if now - last_media_time > 2:
-                break
-
-            if now - start > 5:
-                break
-
         text = format_post(msg.text)
 
-        await send_queue.put((media_buffer.copy(), text, msg.id))
-        media_buffer.clear()
+        if media_buffer:
+            await send_queue.put((media_buffer.copy(), text, msg.id))
+            media_buffer.clear()
+        else:
+            await send_queue.put(([], text, msg.id))
 
 # 🚀 تشغيل
 async def main():
     print("ENTER MAIN")
 
-    await fix_last_id()  # 🔥 أهم سطر
+    load_last_id()
 
     asyncio.create_task(sender())
+
+    await reset_24_may()  # 👈 مرة واحدة فقط
 
     print("🔥 LIVE MODE")
 
