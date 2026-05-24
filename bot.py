@@ -106,15 +106,27 @@ async def sender():
 
         for _ in range(3):
             try:
-                files = [m.media for m in media] if media else None
+                if media:
+                    # 🔥 تقسيم الوسائط
+                    chunks = [media[i:i+10] for i in range(0, len(media), 10)]
 
-                if files:
-                    await client.send_file(target_channel, files, caption=text)
+                    for i, chunk in enumerate(chunks):
+                        files = [m.media for m in chunk]
+
+                        # ✨ النص فقط مع أول مجموعة
+                        if i == 0:
+                            await client.send_file(target_channel, files, caption=text)
+                        else:
+                            await client.send_file(target_channel, files)
+
+                        await asyncio.sleep(1)  # مهم لتجنب flood
+
                 else:
                     await client.send_message(target_channel, text)
 
                 save_last_id(msg_id)
                 print(f"✅ Sent: {msg_id}")
+
                 break
 
             except FloodWaitError as e:
