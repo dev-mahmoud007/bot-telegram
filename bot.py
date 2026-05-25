@@ -199,8 +199,8 @@ async def main():
 
     asyncio.create_task(sender())
 
-    await reset_24_may()  # 👈 مرة واحدة فقط
-
+ #   await reset_24_may()  # 👈 مرة واحدة فقط
+#
     print("🔥 LIVE MODE")
 
     await client.run_until_disconnected()
