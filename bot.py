@@ -12,7 +12,7 @@ from telethon.errors import FloodWaitError
 
 
 ============================================================
-🚀 VERA FASHION MULTI SOURCE BOT
+##🚀 VERA FASHION MULTI SOURCE BOT
 ============================================================
 
 print("🚀 VERA FASHION MULTI SOURCE BOT")
