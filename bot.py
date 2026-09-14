@@ -2,7 +2,7 @@ import os
 import sys
 import asyncio
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError
@@ -25,7 +25,6 @@ client = TelegramClient(StringSession(string_session), api_id, api_hash)
 target_channel = "VeraFashionGaza"
 
 LIVE_CHANNELS = ["mulhim00", "LaleFashion4", "toptanjorli2020", "totih1tr", "emirelatoptan"]
-HISTORY_CHANNELS = ["LaleFashion4", "toptanjorli2020", "totih1tr", "emirelatoptan"]
 
 def extract_price_with_dollar(text):
     match = re.search(r"(\d+(?:\.\d+)?)\s*\$|\$\s*(\d+(?:\.\d+)?)", text)
@@ -99,7 +98,7 @@ def format_post(text, source):
     if color_val: final_text += f"🎨 الألوان: {color_val}\n"
     if code_val: final_text += f"🏷 الكود: {code_val}\n"
     if price_val: final_text += f"💲 السعر: {price_val}\n"
-    final_text += "\n🛍 بيع جملة فقط\n📲 للتواصل والطلب:\n https://wa.me/970592417956"
+    final_text += "\n🛍 بيع جملة فقط\n📲 للتواصل والطلب:\nhttps://wa.me/970592417956"
     return final_text
 
 send_queue = asyncio.Queue()
@@ -123,9 +122,6 @@ async def sender():
         finally:
             send_queue.task_done()
 
-# دالة سحب آخر أسبوع مع نظام التجميع الصارم الجديد
-
-
 # ----------------- نظام الأمان الذكي للبث الحي -----------------
 channel_state = {ch.lower(): {"media": [], "text": None, "grouped_id": None, "timer": None} for ch in LIVE_CHANNELS}
 
@@ -136,7 +132,6 @@ async def force_flush(source):
     media_to_send = state["media"].copy()
     text_to_send = state["text"]
     
-    # تصفير الموديل الحالي لاستقبال موديل جديد
     state["media"].clear()
     state["text"] = None
     state["grouped_id"] = None
@@ -146,7 +141,7 @@ async def force_flush(source):
         await send_queue.put((media_to_send, formatted))
 
 async def timer_flush(source):
-    await asyncio.sleep(3) # فترة أمان أخيرة لو التاجر سكت تماماً
+    await asyncio.sleep(3)
     await force_flush(source)
 
 @client.on(events.NewMessage(chats=LIVE_CHANNELS))
@@ -156,35 +151,29 @@ async def handler(event):
     source = chat.username.lower() if chat.username else str(chat.id)
     state = channel_state[source]
 
-    # إيقاف المؤقت القديم
     if state["timer"] and not state["timer"].done():
         state["timer"].cancel()
 
     should_flush = False
     
-    # فحص فك الاشتباك الفوري
     if state["grouped_id"] and msg.grouped_id and state["grouped_id"] != msg.grouped_id:
         should_flush = True
     elif state["text"] and (msg.text or msg.media):
         if not (msg.grouped_id and msg.grouped_id == state["grouped_id"]):
             should_flush = True
 
-    # إرسال الموديل السابق فوراً لو بدأ التاجر بموديل جديد
     if should_flush:
         await force_flush(source)
 
-    # إضافة البيانات للموديل الحالي
     if msg.grouped_id: state["grouped_id"] = msg.grouped_id
     if msg.media: state["media"].append(msg)
     if msg.text: state["text"] = msg.text
 
-    # تشغيل مؤقت أمان جديد للحالة
     state["timer"] = asyncio.create_task(timer_flush(source))
 # ----------------------------------------------------------------
 
 async def main():
     asyncio.create_task(sender())
-  
     print("🔥 BULLETPROOF LIVE MODE STARTED")
     await client.run_until_disconnected()
 
