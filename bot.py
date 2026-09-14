@@ -124,56 +124,7 @@ async def sender():
             send_queue.task_done()
 
 # دالة سحب آخر أسبوع مع نظام التجميع الصارم الجديد
-async def fetch_history_once():
-    if os.path.exists("history_done.txt"): return
 
-    print("⏳ Fetching last 7 days history with strict grouping...")
-    seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
-
-    for channel in HISTORY_CHANNELS:
-        try:
-            messages = []
-            async for msg in client.iter_messages(channel):
-                if msg.date < seven_days_ago: break
-                messages.append(msg)
-            
-            messages.reverse()
-            final_posts = []
-            current_post = {"media": [], "text": None, "grouped_id": None}
-            
-            for msg in messages:
-                should_flush = False
-                # شرط فك الاشتباك 1: اختلاف الألبوم
-                if current_post["grouped_id"] and msg.grouped_id and current_post["grouped_id"] != msg.grouped_id:
-                    should_flush = True
-                # شرط فك الاشتباك 2: استلمنا نص والآن نستلم شيء جديد لا ينتمي لنفس الألبوم
-                elif current_post["text"] and (msg.text or msg.media):
-                    if not (msg.grouped_id and msg.grouped_id == current_post["grouped_id"]):
-                        should_flush = True
-                        
-                # تفريغ وبدء موديل جديد
-                if should_flush:
-                    if current_post["media"] or current_post["text"]: final_posts.append(current_post.copy())
-                    current_post = {"media": [], "text": None, "grouped_id": None}
-                    
-                if msg.grouped_id: current_post["grouped_id"] = msg.grouped_id
-                if msg.media: current_post["media"].append(msg)
-                if msg.text: current_post["text"] = msg.text
-                    
-            if current_post["media"] or current_post["text"]:
-                final_posts.append(current_post)
-                
-            for post in final_posts:
-                if post["text"]:
-                    formatted = format_post(post["text"], channel)
-                    if formatted:
-                        await send_queue.put((post["media"], formatted))
-                        await asyncio.sleep(1.5)
-        except Exception as e:
-            pass
-
-    with open("history_done.txt", "w") as f: f.write("done")
-    print("✅ History fetch complete!")
 
 # ----------------- نظام الأمان الذكي للبث الحي -----------------
 channel_state = {ch.lower(): {"media": [], "text": None, "grouped_id": None, "timer": None} for ch in LIVE_CHANNELS}
@@ -233,7 +184,7 @@ async def handler(event):
 
 async def main():
     asyncio.create_task(sender())
-  #  await fetch_history_once()
+  
     print("🔥 BULLETPROOF LIVE MODE STARTED")
     await client.run_until_disconnected()
 
