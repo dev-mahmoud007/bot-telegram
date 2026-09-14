@@ -2,7 +2,7 @@ import os
 import sys
 import asyncio
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError
@@ -25,6 +25,7 @@ client = TelegramClient(StringSession(string_session), api_id, api_hash)
 target_channel = "VeraFashionGaza"
 
 LIVE_CHANNELS = ["mulhim00", "LaleFashion4", "toptanjorli2020", "totih1tr", "emirelatoptan"]
+HISTORY_CHANNELS = ["LaleFashion4", "toptanjorli2020", "totih1tr", "emirelatoptan"]
 
 def extract_price_with_dollar(text):
     match = re.search(r"(\d+(?:\.\d+)?)\s*\$|\$\s*(\d+(?:\.\d+)?)", text)
@@ -98,7 +99,7 @@ def format_post(text, source):
     if color_val: final_text += f"🎨 الألوان: {color_val}\n"
     if code_val: final_text += f"🏷 الكود: {code_val}\n"
     if price_val: final_text += f"💲 السعر: {price_val}\n"
-    final_text += "\n🛍 بيع جملة فقط\n📲 للتواصل والطلب:\nhttps://wa.me/970592417956"
+    final_text += "\n🛍 بيع جملة فقط\n📲 للتواصل والطلب: https://wa.me/970592417956"
     return final_text
 
 send_queue = asyncio.Queue()
@@ -122,6 +123,58 @@ async def sender():
         finally:
             send_queue.task_done()
 
+# دالة سحب آخر أسبوع مع نظام التجميع الصارم الجديد
+async def fetch_history_once():
+    if os.path.exists("history_done.txt"): return
+
+    print("⏳ Fetching last 7 days history with strict grouping...")
+    seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+
+    for channel in HISTORY_CHANNELS:
+        try:
+            messages = []
+            async for msg in client.iter_messages(channel):
+                if msg.date < seven_days_ago: break
+                messages.append(msg)
+            
+            messages.reverse()
+            final_posts = []
+            current_post = {"media": [], "text": None, "grouped_id": None}
+            
+            for msg in messages:
+                should_flush = False
+                # شرط فك الاشتباك 1: اختلاف الألبوم
+                if current_post["grouped_id"] and msg.grouped_id and current_post["grouped_id"] != msg.grouped_id:
+                    should_flush = True
+                # شرط فك الاشتباك 2: استلمنا نص والآن نستلم شيء جديد لا ينتمي لنفس الألبوم
+                elif current_post["text"] and (msg.text or msg.media):
+                    if not (msg.grouped_id and msg.grouped_id == current_post["grouped_id"]):
+                        should_flush = True
+                        
+                # تفريغ وبدء موديل جديد
+                if should_flush:
+                    if current_post["media"] or current_post["text"]: final_posts.append(current_post.copy())
+                    current_post = {"media": [], "text": None, "grouped_id": None}
+                    
+                if msg.grouped_id: current_post["grouped_id"] = msg.grouped_id
+                if msg.media: current_post["media"].append(msg)
+                if msg.text: current_post["text"] = msg.text
+                    
+            if current_post["media"] or current_post["text"]:
+                final_posts.append(current_post)
+                
+            for post in final_posts:
+                if post["text"]:
+                    formatted = format_post(post["text"], channel)
+                    if formatted:
+                        await send_queue.put((post["media"], formatted))
+                        await asyncio.sleep(1.5)
+        except Exception as e:
+            pass
+
+    with open("history_done.txt", "w") as f: f.write("done")
+    print("✅ History fetch complete!")
+
 # ----------------- نظام الأمان الذكي للبث الحي -----------------
 channel_state = {ch.lower(): {"media": [], "text": None, "grouped_id": None, "timer": None} for ch in LIVE_CHANNELS}
 
@@ -132,6 +185,7 @@ async def force_flush(source):
     media_to_send = state["media"].copy()
     text_to_send = state["text"]
     
+    # تصفير الموديل الحالي لاستقبال موديل جديد
     state["media"].clear()
     state["text"] = None
     state["grouped_id"] = None
@@ -141,7 +195,7 @@ async def force_flush(source):
         await send_queue.put((media_to_send, formatted))
 
 async def timer_flush(source):
-    await asyncio.sleep(3)
+    await asyncio.sleep(3) # فترة أمان أخيرة لو التاجر سكت تماماً
     await force_flush(source)
 
 @client.on(events.NewMessage(chats=LIVE_CHANNELS))
@@ -151,29 +205,35 @@ async def handler(event):
     source = chat.username.lower() if chat.username else str(chat.id)
     state = channel_state[source]
 
+    # إيقاف المؤقت القديم
     if state["timer"] and not state["timer"].done():
         state["timer"].cancel()
 
     should_flush = False
     
+    # فحص فك الاشتباك الفوري
     if state["grouped_id"] and msg.grouped_id and state["grouped_id"] != msg.grouped_id:
         should_flush = True
     elif state["text"] and (msg.text or msg.media):
         if not (msg.grouped_id and msg.grouped_id == state["grouped_id"]):
             should_flush = True
 
+    # إرسال الموديل السابق فوراً لو بدأ التاجر بموديل جديد
     if should_flush:
         await force_flush(source)
 
+    # إضافة البيانات للموديل الحالي
     if msg.grouped_id: state["grouped_id"] = msg.grouped_id
     if msg.media: state["media"].append(msg)
     if msg.text: state["text"] = msg.text
 
+    # تشغيل مؤقت أمان جديد للحالة
     state["timer"] = asyncio.create_task(timer_flush(source))
 # ----------------------------------------------------------------
 
 async def main():
     asyncio.create_task(sender())
+ #   await fetch_history_once()
     print("🔥 BULLETPROOF LIVE MODE STARTED")
     await client.run_until_disconnected()
 
