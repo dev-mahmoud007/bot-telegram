@@ -99,7 +99,7 @@ def format_post(text, source):
     if color_val: final_text += f"🎨 الألوان: {color_val}\n"
     if code_val: final_text += f"🏷 الكود: {code_val}\n"
     if price_val: final_text += f"💲 السعر: {price_val}\n"
-    final_text += "\n🛍 بيع جملة فقط\n📲 للتواصل والطلب: https://wa.me/970595127374"
+    final_text += "\n🛍 بيع جملة فقط\n📲 للتواصل والطلب: https://wa.me/970592417956"
     return final_text
 
 send_queue = asyncio.Queue()
