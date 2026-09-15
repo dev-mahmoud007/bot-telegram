@@ -24,7 +24,6 @@ string_session = os.getenv("STRING_SESSION")
 client = TelegramClient(StringSession(string_session), api_id, api_hash)
 target_channel = "VeraFashionGaza"
 
-# تم حذف emirelatoptan وإضافة القنوات الجديدة
 LIVE_CHANNELS = ["mulhim00", "LaleFashion4", "toptanjorli2020", "totih1tr", "modalolvatoptan", "cvbnmlj"]
 
 def extract_price_with_dollar(text):
@@ -48,12 +47,13 @@ def format_post(text, source):
     title, price_val, size_val, code_val, color_val, fabric_val = "", None, "", "", "", ""
     source = source.lower()
 
+    # --- تحديث قناة LaleFashion4 للتنسيق الإنجليزي الجديد ---
     if source == "lalefashion4":
-        title = lines[0]
+        title = lines[0]  # السطر الأول كعنوان (مثل New Model)
         for line in lines:
-            if "المودل" in line: code_val = line.replace("المودل", "").strip(" :")
-            elif "Kumaş" in line: fabric_val = line.replace("Kumaş", "").strip(" :")
-            elif "السايز" in line or "الحجم" in line: size_val = re.sub(r"(السايز|الحجم)", "", line).strip(" :")
+            if "Model" in line: code_val = line.replace("Model", "").replace("🔹", "").strip(" :")
+            elif "Kumaş" in line: fabric_val = line.replace("Kumaş", "").replace("🔹", "").strip(" :")
+            elif "Size" in line: size_val = line.replace("Size", "").replace("🔹", "").strip(" :")
         price_num = extract_price_with_dollar(text)
         price_val = f"{price_num + 4}$" if price_num else "على الخاص"
 
@@ -73,7 +73,6 @@ def format_post(text, source):
         price_num = extract_price_with_dollar(text)
         price_val = f"{price_num + 5}$" if price_num else "على الخاص"
 
-    # --- القناة الجديدة الأولى ---
     elif source == "modalolvatoptan":
         title = lines[0]
         sizes = []
@@ -81,11 +80,10 @@ def format_post(text, source):
             if "Beden" in line: sizes.append(line.replace("Beden", "").replace("•", "").strip(" :"))
             elif "Kod" in line: code_val = line.replace("Kod", "").replace("•", "").strip(" :")
             elif "Kumaş" in line: fabric_val = line.replace("Kumaş", "").replace("•", "").strip(" :")
-        if sizes: size_val = " - ".join(sizes) # جمع المقاسات لو كان في أكثر من سطر
+        if sizes: size_val = " - ".join(sizes)
         price_num = extract_price_with_dollar(text) or extract_price_with_word(text, "Fiyat")
         price_val = f"{price_num + 4}$" if price_num else "على الخاص"
 
-    # --- القناة الجديدة الثانية (نسخ حرفي وتعديل السعر بداخل النص) ---
     elif source == "cvbnmlj":
         modified_text = text
         price_num = extract_price_with_dollar(modified_text)
@@ -106,7 +104,6 @@ def format_post(text, source):
                     return m.group(0).replace(num_str, f"{new_num:g}")
                 modified_text = re.sub(pattern, repl_word, modified_text, count=1)
         
-        # وضع كامل النص المعدل كعنوان، وتعطيل الخصائص الأخرى ليظهر كما هو
         title = modified_text.strip()
         price_val = None 
 
@@ -180,7 +177,6 @@ async def handler(event):
     chat = await event.get_chat()
     source = chat.username.lower() if chat.username else str(chat.id)
     
-    # تفادي أي خطأ لو وصلت رسالة من قناة غير موجودة في channel_state بالخطأ
     if source not in channel_state:
         return
         
@@ -214,4 +210,3 @@ async def main():
 
 client.start()
 client.loop.run_until_complete(main())
-
