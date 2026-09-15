@@ -2,7 +2,7 @@ import os
 import sys
 import asyncio
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError
@@ -24,8 +24,8 @@ string_session = os.getenv("STRING_SESSION")
 client = TelegramClient(StringSession(string_session), api_id, api_hash)
 target_channel = "VeraFashionGaza"
 
-LIVE_CHANNELS = ["mulhim00", "LaleFashion4", "toptanjorli2020", "totih1tr", "emirelatoptan"]
-HISTORY_CHANNELS = ["LaleFashion4", "toptanjorli2020", "totih1tr", "emirelatoptan"]
+# تم حذف emirelatoptan وإضافة القنوات الجديدة
+LIVE_CHANNELS = ["mulhim00", "LaleFashion4", "toptanjorli2020", "totih1tr", "modalolvatoptan", "cvbnmlj"]
 
 def extract_price_with_dollar(text):
     match = re.search(r"(\d+(?:\.\d+)?)\s*\$|\$\s*(\d+(?:\.\d+)?)", text)
@@ -33,7 +33,7 @@ def extract_price_with_dollar(text):
     return None
 
 def extract_price_with_word(text, word):
-    match = re.search(fr"(\d+(?:\.\d+)?)\s*{word}|{word}\s*(\d+(?:\.\d+)?)", text)
+    match = re.search(fr"(\d+(?:\.\d+)?)\s*{word}|{word}\s*[:\-]?\s*(\d+(?:\.\d+)?)", text, re.IGNORECASE)
     if match: return float(match.group(1) or match.group(2))
     return None
 
@@ -73,13 +73,42 @@ def format_post(text, source):
         price_num = extract_price_with_dollar(text)
         price_val = f"{price_num + 5}$" if price_num else "على الخاص"
 
-    elif source == "emirelatoptan":
+    # --- القناة الجديدة الأولى ---
+    elif source == "modalolvatoptan":
+        title = lines[0]
+        sizes = []
         for line in lines:
-            if not title and contains_arabic(line): title = line
-            if "كود الموديل" in line: code_val = line.replace("كود الموديل", "").strip(" :")
-            elif "السيري" in line: size_val = line.replace("معلومات السيري", "").replace("السيري", "").strip(" :")
-        price_num = extract_price_with_word(text, "دولار")
-        price_val = f"{price_num + 5}$" if price_num else "على الخاص"
+            if "Beden" in line: sizes.append(line.replace("Beden", "").replace("•", "").strip(" :"))
+            elif "Kod" in line: code_val = line.replace("Kod", "").replace("•", "").strip(" :")
+            elif "Kumaş" in line: fabric_val = line.replace("Kumaş", "").replace("•", "").strip(" :")
+        if sizes: size_val = " - ".join(sizes) # جمع المقاسات لو كان في أكثر من سطر
+        price_num = extract_price_with_dollar(text) or extract_price_with_word(text, "Fiyat")
+        price_val = f"{price_num + 4}$" if price_num else "على الخاص"
+
+    # --- القناة الجديدة الثانية (نسخ حرفي وتعديل السعر بداخل النص) ---
+    elif source == "cvbnmlj":
+        modified_text = text
+        price_num = extract_price_with_dollar(modified_text)
+        if price_num:
+            pattern = r"(\d+(?:\.\d+)?)\s*\$|\$\s*(\d+(?:\.\d+)?)"
+            def repl(m):
+                num_str = m.group(1) or m.group(2)
+                new_num = float(num_str) + 4
+                return m.group(0).replace(num_str, f"{new_num:g}")
+            modified_text = re.sub(pattern, repl, modified_text, count=1)
+        else:
+            price_num_word = extract_price_with_word(modified_text, "السعر") or extract_price_with_word(modified_text, "سعر")
+            if price_num_word:
+                pattern = r"(السعر|سعر)\s*[:\-]?\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*(السعر|سعر)"
+                def repl_word(m):
+                    num_str = m.group(2) or m.group(3)
+                    new_num = float(num_str) + 4
+                    return m.group(0).replace(num_str, f"{new_num:g}")
+                modified_text = re.sub(pattern, repl_word, modified_text, count=1)
+        
+        # وضع كامل النص المعدل كعنوان، وتعطيل الخصائص الأخرى ليظهر كما هو
+        title = modified_text.strip()
+        price_val = None 
 
     elif source == "mulhim00":
         title = lines[0]
@@ -99,7 +128,7 @@ def format_post(text, source):
     if color_val: final_text += f"🎨 الألوان: {color_val}\n"
     if code_val: final_text += f"🏷 الكود: {code_val}\n"
     if price_val: final_text += f"💲 السعر: {price_val}\n"
-    final_text += "\n🛍 بيع جملة فقط\n📲 للتواصل والطلب: https://wa.me/970592417956"
+    final_text += "\n🛍 بيع جملة فقط\n📲 للتواصل والطلب:\nhttps://wa.me/970592417956"
     return final_text
 
 send_queue = asyncio.Queue()
@@ -123,58 +152,6 @@ async def sender():
         finally:
             send_queue.task_done()
 
-# دالة سحب آخر أسبوع مع نظام التجميع الصارم الجديد
-async def fetch_history_once():
-    if os.path.exists("history_done.txt"): return
-
-    print("⏳ Fetching last 7 days history with strict grouping...")
-    seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
-
-    for channel in HISTORY_CHANNELS:
-        try:
-            messages = []
-            async for msg in client.iter_messages(channel):
-                if msg.date < seven_days_ago: break
-                messages.append(msg)
-            
-            messages.reverse()
-            final_posts = []
-            current_post = {"media": [], "text": None, "grouped_id": None}
-            
-            for msg in messages:
-                should_flush = False
-                # شرط فك الاشتباك 1: اختلاف الألبوم
-                if current_post["grouped_id"] and msg.grouped_id and current_post["grouped_id"] != msg.grouped_id:
-                    should_flush = True
-                # شرط فك الاشتباك 2: استلمنا نص والآن نستلم شيء جديد لا ينتمي لنفس الألبوم
-                elif current_post["text"] and (msg.text or msg.media):
-                    if not (msg.grouped_id and msg.grouped_id == current_post["grouped_id"]):
-                        should_flush = True
-                        
-                # تفريغ وبدء موديل جديد
-                if should_flush:
-                    if current_post["media"] or current_post["text"]: final_posts.append(current_post.copy())
-                    current_post = {"media": [], "text": None, "grouped_id": None}
-                    
-                if msg.grouped_id: current_post["grouped_id"] = msg.grouped_id
-                if msg.media: current_post["media"].append(msg)
-                if msg.text: current_post["text"] = msg.text
-                    
-            if current_post["media"] or current_post["text"]:
-                final_posts.append(current_post)
-                
-            for post in final_posts:
-                if post["text"]:
-                    formatted = format_post(post["text"], channel)
-                    if formatted:
-                        await send_queue.put((post["media"], formatted))
-                        await asyncio.sleep(1.5)
-        except Exception as e:
-            pass
-
-    with open("history_done.txt", "w") as f: f.write("done")
-    print("✅ History fetch complete!")
-
 # ----------------- نظام الأمان الذكي للبث الحي -----------------
 channel_state = {ch.lower(): {"media": [], "text": None, "grouped_id": None, "timer": None} for ch in LIVE_CHANNELS}
 
@@ -185,7 +162,6 @@ async def force_flush(source):
     media_to_send = state["media"].copy()
     text_to_send = state["text"]
     
-    # تصفير الموديل الحالي لاستقبال موديل جديد
     state["media"].clear()
     state["text"] = None
     state["grouped_id"] = None
@@ -195,7 +171,7 @@ async def force_flush(source):
         await send_queue.put((media_to_send, formatted))
 
 async def timer_flush(source):
-    await asyncio.sleep(3) # فترة أمان أخيرة لو التاجر سكت تماماً
+    await asyncio.sleep(3)
     await force_flush(source)
 
 @client.on(events.NewMessage(chats=LIVE_CHANNELS))
@@ -203,39 +179,39 @@ async def handler(event):
     msg = event.message
     chat = await event.get_chat()
     source = chat.username.lower() if chat.username else str(chat.id)
+    
+    # تفادي أي خطأ لو وصلت رسالة من قناة غير موجودة في channel_state بالخطأ
+    if source not in channel_state:
+        return
+        
     state = channel_state[source]
 
-    # إيقاف المؤقت القديم
     if state["timer"] and not state["timer"].done():
         state["timer"].cancel()
 
     should_flush = False
     
-    # فحص فك الاشتباك الفوري
     if state["grouped_id"] and msg.grouped_id and state["grouped_id"] != msg.grouped_id:
         should_flush = True
     elif state["text"] and (msg.text or msg.media):
         if not (msg.grouped_id and msg.grouped_id == state["grouped_id"]):
             should_flush = True
 
-    # إرسال الموديل السابق فوراً لو بدأ التاجر بموديل جديد
     if should_flush:
         await force_flush(source)
 
-    # إضافة البيانات للموديل الحالي
     if msg.grouped_id: state["grouped_id"] = msg.grouped_id
     if msg.media: state["media"].append(msg)
     if msg.text: state["text"] = msg.text
 
-    # تشغيل مؤقت أمان جديد للحالة
     state["timer"] = asyncio.create_task(timer_flush(source))
 # ----------------------------------------------------------------
 
 async def main():
     asyncio.create_task(sender())
- #   await fetch_history_once()
     print("🔥 BULLETPROOF LIVE MODE STARTED")
     await client.run_until_disconnected()
 
 client.start()
 client.loop.run_until_complete(main())
+
