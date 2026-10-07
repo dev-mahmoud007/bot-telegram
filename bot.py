@@ -1,212 +1,594 @@
 import os
-import sys
-import asyncio
 import re
-from datetime import datetime, timezone
-from telethon import TelegramClient, events
+import time
+import asyncio
+import logging
+from collections import deque
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
+from telethon import TelegramClient, events, utils
 from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError
+from telethon.tl.types import MessageMediaWebPage
 
-LOCK_FILE = "/tmp/bot.lock"
-if os.path.exists(LOCK_FILE):
-    sys.exit()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+log = logging.getLogger("vera")
 
-with open(LOCK_FILE, "w") as f:
-    f.write("running")
+# =====================  الإعدادات  =====================
+API_ID = int(os.environ["API_ID"])
+API_HASH = os.environ["API_HASH"]
+STRING_SESSION = os.environ["STRING_SESSION"]
+TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "VeraFashionGaza")
+NOTIFY_TO = os.getenv("NOTIFY_TO", "me")   # وين توصلك إشعارات التعديل/الحذف ("me" = الرسائل المحفوظة، فاضي = تعطيل)
 
-import atexit
-atexit.register(lambda: os.remove(LOCK_FILE) if os.path.exists(LOCK_FILE) else None)
+CAPTION_WAIT = 3          # ثواني انتظار بعد آخر وسائط فيها كابشن (نص ضمن الألبوم)
+MEDIA_WAIT = 30           # ثواني انتظار النص بعد وسائط بدون نص قبل ما ننشرها لحالها
+REPLACE_WINDOW = 180      # المدة اللي نستنى فيها نص بديل بعد ما المصدر يحذف النص
+POST_TEXT_ONLY = True     # نشر الرسائل النصية اللي مالها وسائط
+DELETE_TEXT_IF_NOT_REPLACED = False  # لو انحذف النص ولم يأتِ بديل: احذف نصي أنا كمان؟
+MAX_HISTORY = 3000
+ON_REQUEST = "على الخاص"
+WA_LINK = "https://wa.me/970592417956"
 
-api_id = int(os.getenv("API_ID"))
-api_hash = os.getenv("API_HASH")
-string_session = os.getenv("STRING_SESSION")
+SOURCES = {
+    "mulhim00":        dict(markup=4, title="first", fabric_default="تركية مستوردة 🇹🇷"),
+    "lalefashion4":    dict(markup=4, title="first"),
+    "toptanjorli2020": dict(markup=5, title="nodigit"),
+    "totih1tr":        dict(markup=5, title="arabic"),
+    "modalolvatoptan": dict(markup=4, title="first", multi_size=True),
+    "cvbnmlj":         dict(markup=4, mode="literal"),
+}
 
-client = TelegramClient(StringSession(string_session), api_id, api_hash)
-target_channel = "VeraFashionGaza"
+# =====================  التحليل (Parsing)  =====================
+_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
 
-LIVE_CHANNELS = ["mulhim00", "LaleFashion4", "toptanjorli2020", "totih1tr", "modalolvatoptan", "cvbnmlj"]
 
-def extract_price_with_dollar(text):
-    match = re.search(r"(\d+(?:\.\d+)?)\s*\$|\$\s*(\d+(?:\.\d+)?)", text)
-    if match: return float(match.group(1) or match.group(2))
-    return None
+def norm(t):
+    return t.translate(_DIGITS)  # نفس الطول تماماً، فالمواقع تبقى صحيحة
 
-def extract_price_with_word(text, word):
-    match = re.search(fr"(\d+(?:\.\d+)?)\s*{word}|{word}\s*[:\-]?\s*(\d+(?:\.\d+)?)", text, re.IGNORECASE)
-    if match: return float(match.group(1) or match.group(2))
-    return None
 
-def contains_arabic(text):
-    return bool(re.search(r"[\u0600-\u06FF]", text))
+NUM = r"\d+(?:[.,]\d+)?"
+PRICE_PATTERNS = [
+    re.compile(rf"(?:السعر|سعر|f[iİı]yat\w*|price)\s*[:：\-–=]?\s*\$?\s*({NUM})", re.I),
+    re.compile(rf"({NUM})\s*(?:\$|دولار|دولارات|usd|dollars?)", re.I),
+    re.compile(rf"\$\s*({NUM})"),
+]
+
+
+def find_price(text):
+    n = norm(text)
+    for pat in PRICE_PATTERNS:
+        m = pat.search(n)
+        if m:
+            return float(m.group(1).replace(",", ".")), m.span(1)
+    return None, None
+
+
+def fmt_num(v):
+    return f"{v:g}"
+
+
+SIZE_KW = ["مقاس", "قياس", "beden", "size", "ölçü", "olcu"]
+CODE_KW = ["كود", "kod", "model", "code"]
+FABRIC_KW = ["قماش", "خامة", "خام", "kuma[sş]", "fabric"]
+COLOR_KW = ["الوان", "ألوان", "لون", "renk", "colou?r"]
+PRICE_KW = ["السعر", "سعر", "f[iİı]yat", "price"]
+SIRI_KW = ["siri", "seri", "سيري", "سيرى"]
+
+
+def _rx(words):
+    return re.compile(rf"^\W*(?:ال)?(?:{'|'.join(words)})\w*[\s:：\-–—=_•·|]*(.*)$", re.I)
+
+
+SIZE_RE, CODE_RE, FABRIC_RE, COLOR_RE = _rx(SIZE_KW), _rx(CODE_KW), _rx(FABRIC_KW), _rx(COLOR_KW)
+FIELD_LINE = _rx(SIZE_KW + CODE_KW + FABRIC_KW + COLOR_KW + PRICE_KW + SIRI_KW)
+SIZE_SUFFIX = re.compile(r"^([\d\s\-–_.,،/]+?)\s*(?:مقاس\w*|قياس\w*|beden)\s*$", re.I)
+SIZE_NUMERIC = re.compile(r"^[\d\s\-–_.,،/]+$")
+
+
+def get_all(lines, rx):
+    out = []
+    for l in lines:
+        m = rx.match(l)
+        if m and m.group(1).strip():
+            out.append(m.group(1).strip())
+    return out
+
+
+def clean_size(v):
+    return re.sub(r"\.{3,}|…+", " - ", v).strip()
+
+
+def find_sizes(lines, multi=False):
+    vals = get_all(lines, SIZE_RE)
+    if not vals:
+        for l in lines:
+            m = SIZE_SUFFIX.match(norm(l))
+            if m:
+                vals = [m.group(1).strip()]
+                break
+    if not vals:
+        for l in lines:
+            n = norm(l).strip()
+            if SIZE_NUMERIC.match(n) and re.search(r"[\-–_.,،/]", n):
+                vals = [n]
+                break
+    if not vals:
+        return ""
+    vals = [clean_size(v) for v in vals]
+    return " و ".join(vals) if multi else vals[0]
+
+
+def find_siri(lines):
+    for l in lines:
+        n = norm(l)
+        if re.search("|".join(SIRI_KW), n, re.I):
+            m = re.search(r"\d+", n)
+            if m:
+                return m.group(0)
+    return ""
+
+
+def pick_title(lines, mode):
+    if mode == "nodigit":
+        out = []
+        for l in lines:
+            if re.search(r"\d", norm(l)) or FIELD_LINE.match(l):
+                break
+            out.append(l)
+            if len(out) == 2:
+                break
+        return "\n".join(out)
+    if mode == "arabic":
+        for l in lines:
+            if re.search(r"[\u0600-\u06FF]", l) and not FIELD_LINE.match(l):
+                return l
+    return lines[0]
+
+
+def build(title, f):
+    out = "✨ فيرا فاشون | Vera Fashion 👗\n\n"
+    if title:
+        out += f"{title}\n\n"
+    out += "ـــــــــــــــــــــــــــــ\n"
+    if f.get("fabric"): out += f"🧵 الخامة: {f['fabric']}\n"
+    if f.get("size"):   out += f"📏 المقاسات: {f['size']}\n"
+    if f.get("siri"):   out += f"🔢 السيري: {f['siri']} قطع\n"
+    if f.get("color"):  out += f"🎨 الألوان: {f['color']}\n"
+    if f.get("code"):   out += f"🏷 الكود: {f['code']}\n"
+    if f.get("price"):  out += f"💲 السعر: {f['price']}\n"
+    out += f"\n🛍 بيع جملة فقط\n📲 للتواصل والطلب:\n{WA_LINK}"
+    return out
+
 
 def format_post(text, source):
-    if not text: return None
-    lines = [line.strip() for line in text.split("\n") if line.strip()]
-    if not lines: return None
+    if not text or not text.strip():
+        return None
+    cfg = SOURCES.get(source.lower())
+    if not cfg:
+        return None
+    markup = cfg["markup"]
 
-    title, price_val, size_val, code_val, color_val, fabric_val = "", None, "", "", "", ""
-    source = source.lower()
+    if cfg.get("mode") == "literal":
+        body = text.strip()
+        v, span = find_price(body)
+        if v is not None:
+            body = body[:span[0]] + fmt_num(v + markup) + body[span[1]:]
+        return build(body, {})
 
-    # --- تحديث قناة LaleFashion4 للتنسيق الإنجليزي الجديد ---
-    if source == "lalefashion4":
-        title = lines[0]  # السطر الأول كعنوان (مثل New Model)
-        for line in lines:
-            if "Model" in line: code_val = line.replace("Model", "").replace("🔹", "").strip(" :")
-            elif "Kumaş" in line: fabric_val = line.replace("Kumaş", "").replace("🔹", "").strip(" :")
-            elif "Size" in line: size_val = line.replace("Size", "").replace("🔹", "").strip(" :")
-        price_num = extract_price_with_dollar(text)
-        price_val = f"{price_num + 4}$" if price_num else "على الخاص"
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    if not lines:
+        return None
+    v, _ = find_price(text)
+    f = {
+        "size": find_sizes(lines, cfg.get("multi_size", False)),
+        "code": (get_all(lines, CODE_RE) or [""])[0],
+        "fabric": (get_all(lines, FABRIC_RE) or [cfg.get("fabric_default", "")])[0],
+        "color": (get_all(lines, COLOR_RE) or [""])[0],
+        "siri": find_siri(lines),
+        "price": f"{fmt_num(v + markup)}$" if v is not None else ON_REQUEST,
+    }
+    return build(pick_title(lines, cfg.get("title", "first")), f)
 
-    elif source == "toptanjorli2020":
-        for line in lines:
-            if not title and not re.search(r"\d", line): title = line
-            if re.fullmatch(r"[\d\-\s\,]+", line): size_val = line
-        price_num = extract_price_with_dollar(text)
-        price_val = f"{price_num + 5}$" if price_num else "على الخاص"
 
-    elif source == "totih1tr":
-        title = lines[0]
-        for line in lines:
-            if "مقاس" in line: size_val = line.replace("مقاس", "").strip(" :")
-            elif "الوان" in line: color_val = line.replace("الوان", "").strip(" :")
-            elif "قماش" in line: fabric_val = line.replace("قماش", "").strip(" :")
-        price_num = extract_price_with_dollar(text)
-        price_val = f"{price_num + 5}$" if price_num else "على الخاص"
+def safe_format(text, source):
+    try:
+        return format_post(text, source)
+    except Exception:
+        log.exception("format_post failed for %s", source)
+        return text  # أسلم من ضياع النص
 
-    elif source == "modalolvatoptan":
-        title = lines[0]
-        sizes = []
-        for line in lines:
-            if "Beden" in line: sizes.append(line.replace("Beden", "").replace("•", "").strip(" :"))
-            elif "Kod" in line: code_val = line.replace("Kod", "").replace("•", "").strip(" :")
-            elif "Kumaş" in line: fabric_val = line.replace("Kumaş", "").replace("•", "").strip(" :")
-        if sizes: size_val = " - ".join(sizes)
-        price_num = extract_price_with_dollar(text) or extract_price_with_word(text, "Fiyat")
-        price_val = f"{price_num + 4}$" if price_num else "على الخاص"
 
-    elif source == "cvbnmlj":
-        modified_text = text
-        price_num = extract_price_with_dollar(modified_text)
-        if price_num:
-            pattern = r"(\d+(?:\.\d+)?)\s*\$|\$\s*(\d+(?:\.\d+)?)"
-            def repl(m):
-                num_str = m.group(1) or m.group(2)
-                new_num = float(num_str) + 4
-                return m.group(0).replace(num_str, f"{new_num:g}")
-            modified_text = re.sub(pattern, repl, modified_text, count=1)
-        else:
-            price_num_word = extract_price_with_word(modified_text, "السعر") or extract_price_with_word(modified_text, "سعر")
-            if price_num_word:
-                pattern = r"(السعر|سعر)\s*[:\-]?\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*(السعر|سعر)"
-                def repl_word(m):
-                    num_str = m.group(2) or m.group(3)
-                    new_num = float(num_str) + 4
-                    return m.group(0).replace(num_str, f"{new_num:g}")
-                modified_text = re.sub(pattern, repl_word, modified_text, count=1)
-        
-        title = modified_text.strip()
-        price_val = None 
+# =====================  الحالة  =====================
+@dataclass(eq=False)
+class Post:
+    source: str
+    media: list = field(default_factory=list)       # رسائل المصدر (قبل الإرسال)
+    text: Optional[str] = None
+    text_id: Optional[int] = None
+    last_group: Optional[int] = None
+    version: int = 0
+    lock: Any = field(default_factory=asyncio.Lock)
+    sent: bool = False
+    cancelled: bool = False
+    media_ids: set = field(default_factory=set)
+    sent_media: dict = field(default_factory=dict)  # id في المصدر -> رسالتي المرسلة
+    sent_text: Any = None
+    shown: Optional[str] = None
+    text_deleted: bool = False
+    awaiting_until: float = 0.0
+    keys: set = field(default_factory=set)
 
-    elif source == "mulhim00":
-        title = lines[0]
-        for line in lines:
-            if re.search(r"(?:السعر|سعر)\s*:", line):
-                match = re.search(r"(\d+(?:\.\d+)?)", line)
-                if match: price_val = f"{float(match.group(1)) + 4}$"
-            elif re.search(r"(?:المقاس|المقاسات|القياسات)\s*:", line): size_val = re.sub(r".*?(?:المقاس|المقاسات|القياسات)\s*:\s*", "", line)
-            elif re.search(r"(?:الكود|كود)\s*:", line): code_val = re.sub(r".*?(?:الكود|كود)\s*:\s*", "", line)
-        fabric_val = "تركية مستوردة 🇹🇷"
 
-    final_text = "✨ فيرا فاشون | Vera Fashion 👗\n\n"
-    if title: final_text += f"{title}\n\n"
-    final_text += "ـــــــــــــــــــــــــــــ\n"
-    if fabric_val: final_text += f"🧵 الخامة: {fabric_val}\n"
-    if size_val: final_text += f"📏 المقاسات: {size_val}\n"
-    if color_val: final_text += f"🎨 الألوان: {color_val}\n"
-    if code_val: final_text += f"🏷 الكود: {code_val}\n"
-    if price_val: final_text += f"💲 السعر: {price_val}\n"
-    final_text += "\n🛍 بيع جملة فقط\n📲 للتواصل والطلب:\nhttps://wa.me/970592417956"
-    return final_text
+class Chan:
+    def __init__(self, name):
+        self.name = name
+        self.lock = asyncio.Lock()
+        self.pending: Optional[Post] = None
+        self.recent = deque(maxlen=8)
 
-send_queue = asyncio.Queue()
+
+client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
+target = None
+id_to_name = {}
+channels = {}
+queue = None
+index = {}          # (source, msg_id) -> Post
+history = deque()
+bg_tasks = set()
+
+
+def spawn(coro):
+    t = asyncio.create_task(coro)
+    bg_tasks.add(t)
+    t.add_done_callback(bg_tasks.discard)
+
+
+def is_media(msg):
+    return bool(msg.media) and not isinstance(msg.media, MessageMediaWebPage)
+
+
+async def retry(fn, *a, **k):
+    for _ in range(6):
+        try:
+            return await fn(*a, **k)
+        except FloodWaitError as e:
+            log.warning("FloodWait %ss", e.seconds)
+            await asyncio.sleep(e.seconds + 1)
+    raise RuntimeError("too many flood waits")
+
+
+async def notify(text):
+    log.info(text.replace("\n", " | "))
+    if NOTIFY_TO:
+        try:
+            await retry(client.send_message, NOTIFY_TO, text)
+        except Exception:
+            log.exception("notify failed")
+
+
+def add_key(post, mid):
+    k = (post.source, mid)
+    index[k] = post
+    post.keys.add(k)
+
+
+def register(post):
+    for mid in post.media_ids:
+        add_key(post, mid)
+    if post.text_id:
+        add_key(post, post.text_id)
+    history.append(post)
+    while len(history) > MAX_HISTORY:
+        old = history.popleft()
+        for k in old.keys:
+            index.pop(k, None)
+
+
+def short(t, n=150):
+    t = (t or "").replace("\n", " ")
+    return t if len(t) <= n else t[:n] + "…"
+
+
+# =====================  الإرسال (طابور واحد، كل منشور وحدة كاملة)  =====================
+async def send_post(post):
+    media = sorted(post.media, key=lambda m: m.id)
+    try:
+        for i in range(0, len(media), 10):
+            chunk = media[i:i + 10]
+            try:
+                res = await retry(client.send_file, target, [m.media for m in chunk])
+                res = res if isinstance(res, list) else [res]
+                pairs = list(zip(chunk, res))
+            except Exception:
+                log.exception("album failed, sending one by one")
+                pairs = []
+                for m in chunk:
+                    pairs.append((m, await retry(client.send_file, target, m.media)))
+            for m, s in pairs:
+                post.sent_media[m.id] = s
+            if i + 10 < len(media):
+                await asyncio.sleep(1.5)
+        if post.text:
+            formatted = safe_format(post.text, post.source)
+            if formatted:
+                post.sent_text = await retry(client.send_message, target, formatted)
+                post.shown = formatted
+    finally:
+        post.sent = True
+
 
 async def sender():
     while True:
-        media, text = await send_queue.get()
+        post = await queue.get()
         try:
-            if media:
-                chunks = [media[i:i+10] for i in range(0, len(media), 10)]
-                for chunk in chunks:
-                    files = [m.media for m in chunk]
-                    await client.send_file(target_channel, files)
-                    await asyncio.sleep(1.5)
-            if text:
-                await client.send_message(target_channel, text)
-        except FloodWaitError as e:
-            await asyncio.sleep(e.seconds)
-        except Exception as e:
-            pass
+            async with post.lock:
+                if not post.cancelled:
+                    await send_post(post)
+        except Exception:
+            log.exception("send failed")
+            await notify(f"⚠️ [{post.source}] فشل إرسال منشور، شوف اللوج")
         finally:
-            send_queue.task_done()
+            queue.task_done()
+        await asyncio.sleep(0.5)
 
-# ----------------- نظام الأمان الذكي للبث الحي -----------------
-channel_state = {ch.lower(): {"media": [], "text": None, "grouped_id": None, "timer": None} for ch in LIVE_CHANNELS}
 
-async def force_flush(source):
-    state = channel_state[source]
-    if not state["media"] and not state["text"]: return
-
-    media_to_send = state["media"].copy()
-    text_to_send = state["text"]
-    
-    state["media"].clear()
-    state["text"] = None
-    state["grouped_id"] = None
-    
-    formatted = format_post(text_to_send, source) if text_to_send else None
-    if media_to_send or formatted:
-        await send_queue.put((media_to_send, formatted))
-
-async def timer_flush(source):
-    await asyncio.sleep(3)
-    await force_flush(source)
-
-@client.on(events.NewMessage(chats=LIVE_CHANNELS))
-async def handler(event):
-    msg = event.message
-    chat = await event.get_chat()
-    source = chat.username.lower() if chat.username else str(chat.id)
-    
-    if source not in channel_state:
+# =====================  تجميع المنشورات لكل قناة  =====================
+async def flush(ch):
+    """يُستدعى والقفل ممسوك."""
+    p = ch.pending
+    ch.pending = None
+    if not p or (not p.media and not p.text):
         return
-        
-    state = channel_state[source]
+    p.media.sort(key=lambda m: m.id)
+    p.media_ids = {m.id for m in p.media}
+    register(p)
+    ch.recent.append(p)
+    await queue.put(p)
 
-    if state["timer"] and not state["timer"].done():
-        state["timer"].cancel()
 
-    should_flush = False
-    
-    if state["grouped_id"] and msg.grouped_id and state["grouped_id"] != msg.grouped_id:
-        should_flush = True
-    elif state["text"] and (msg.text or msg.media):
-        if not (msg.grouped_id and msg.grouped_id == state["grouped_id"]):
-            should_flush = True
+def arm_timer(ch, p, delay):
+    v = p.version
 
-    if should_flush:
-        await force_flush(source)
+    async def run():
+        await asyncio.sleep(delay)
+        async with ch.lock:
+            if ch.pending is p and p.version == v:
+                await flush(ch)
 
-    if msg.grouped_id: state["grouped_id"] = msg.grouped_id
-    if msg.media: state["media"].append(msg)
-    if msg.text: state["text"] = msg.text
+    spawn(run())
 
-    state["timer"] = asyncio.create_task(timer_flush(source))
-# ----------------------------------------------------------------
 
+def find_replaceable(ch):
+    now = time.time()
+    for post in reversed(ch.recent):
+        if post.text_deleted and now < post.awaiting_until:
+            return post
+    return None
+
+
+async def apply_text(post, mid, text):
+    """القفل الخاص بالمنشور ممسوك. يطبّق نصاً جديداً/معدلاً."""
+    post.text_id, post.text, post.text_deleted = mid, text, False
+    add_key(post, mid)
+    if not post.sent:
+        return
+    formatted = safe_format(text, post.source)
+    if not formatted:
+        return
+    if post.sent_text:
+        if formatted != post.shown:
+            await retry(client.edit_message, target, post.sent_text.id, formatted)
+            post.shown = formatted
+    else:
+        post.sent_text = await retry(client.send_message, target, formatted)
+        post.shown = formatted
+
+
+async def on_new(event):
+    msg = event.message
+    src = id_to_name.get(event.chat_id)
+    if not src:
+        return
+    ch = channels[src]
+    text = msg.raw_text or ""
+    async with ch.lock:
+        p = ch.pending
+        if is_media(msg):
+            same_album = bool(msg.grouped_id) and msg.grouped_id == p.last_group if p else False
+            if p and p.text and not same_album:
+                await flush(ch)
+                p = None
+            if p is None:
+                p = ch.pending = Post(src)
+            p.media.append(msg)
+            p.last_group = msg.grouped_id
+            if text.strip():
+                p.text, p.text_id = text, msg.id
+            p.version += 1
+            arm_timer(ch, p, CAPTION_WAIT if p.text else MEDIA_WAIT)
+            return
+
+        if not text.strip():
+            return
+
+        # رسالة نصية بدون وسائط
+        if p and p.media and not p.text:
+            p.text, p.text_id = text, msg.id
+            p.version += 1
+            await flush(ch)                      # النص وصل: انشر الموديل فوراً
+            return
+        if p:
+            await flush(ch)
+
+        post = find_replaceable(ch)              # المصدر حذف النص وبعث نص جديد؟
+        if post:
+            async with post.lock:
+                await apply_text(post, msg.id, text)
+            await notify(f"🔁 [{src}] وصل نص بديل (msg {msg.id}) → عدّلت نص منشورك\n{short(text)}")
+            return
+
+        if POST_TEXT_ONLY:
+            np = Post(src)
+            np.text, np.text_id = text, msg.id
+            ch.pending = np
+            await flush(ch)
+
+
+async def on_edit(event):
+    msg = event.message
+    src = id_to_name.get(event.chat_id)
+    if not src:
+        return
+    ch = channels[src]
+    new_text = msg.raw_text or ""
+
+    async with ch.lock:
+        p = ch.pending
+        if p and (msg.id == p.text_id or any(m.id == msg.id for m in p.media)):
+            if msg.id == p.text_id and new_text != p.text:
+                old = p.text
+                p.text, p.text_id = (new_text, msg.id) if new_text.strip() else (None, None)
+                p.version += 1
+                await notify(f"✏️ [{src}] تعديل نص (msg {msg.id}) قبل النشر\nقبل: {short(old)}\nبعد: {short(new_text)}")
+            elif new_text.strip() and not p.text:
+                p.text, p.text_id = new_text, msg.id
+                p.version += 1
+            for i, m in enumerate(p.media):
+                if m.id == msg.id:
+                    p.media[i] = msg
+            return
+
+    post = index.get((src, msg.id))
+    if not post:
+        return
+    async with post.lock:
+        if msg.id == post.text_id:
+            if new_text == post.text:
+                return
+            old = post.text
+            if not new_text.strip():
+                await mark_text_removed(post, msg.id)
+                return
+            await apply_text(post, msg.id, new_text)
+            await notify(f"✏️ [{src}] تعديل نص (msg {msg.id}) → عدّلت منشورك\nقبل: {short(old)}\nبعد: {short(new_text)}")
+        elif post.text_id is None and new_text.strip() and msg.id in post.media_ids:
+            await apply_text(post, msg.id, new_text)
+            await notify(f"✏️ [{src}] انضاف نص لموديل منشور (msg {msg.id}) → نشرت النص\n{short(new_text)}")
+
+
+async def mark_text_removed(post, mid):
+    post.text_deleted = True
+    post.awaiting_until = time.time() + REPLACE_WINDOW
+    if not post.sent:
+        post.text, post.text_id = None, None
+    spawn(expiry_notice(post, mid))
+    await notify(f"🗑 [{post.source}] انحذف النص (msg {mid}) → بستنى نص بديل {REPLACE_WINDOW} ثانية")
+
+
+async def expiry_notice(post, mid):
+    await asyncio.sleep(REPLACE_WINDOW + 1)
+    if post.text_deleted and not post.cancelled:
+        async with post.lock:
+            if not post.text_deleted:
+                return
+            if DELETE_TEXT_IF_NOT_REPLACED and post.sent_text:
+                await retry(client.delete_messages, target, [post.sent_text.id])
+                post.sent_text = None
+                await notify(f"🗑 [{post.source}] ما إجا نص بديل، حذفت النص من قناتك")
+            else:
+                await notify(f"ℹ️ [{post.source}] ما إجا نص بديل لـ msg {mid}، تركت النص الحالي")
+
+
+async def on_delete(event):
+    src = id_to_name.get(event.chat_id)
+    if not src:
+        return
+    ch = channels[src]
+    for mid in event.deleted_ids:
+        touched = False
+        async with ch.lock:
+            p = ch.pending
+            if p:
+                if mid == p.text_id:
+                    p.text, p.text_id = None, None
+                    p.version += 1
+                    touched = True
+                    await notify(f"🗑 [{src}] انحذف النص (msg {mid}) قبل النشر")
+                if any(m.id == mid for m in p.media):
+                    p.media = [m for m in p.media if m.id != mid]
+                    p.version += 1
+                    touched = True
+                    await notify(f"🗑 [{src}] انحذفت وسائط (msg {mid}) قبل النشر")
+                    if not p.media and not p.text:
+                        ch.pending = None
+        if touched:
+            continue
+        post = index.get((src, mid))
+        if post:
+            async with post.lock:
+                await handle_deleted(post, mid)
+
+
+async def handle_deleted(post, mid):
+    is_text = mid == post.text_id
+    if mid in post.media_ids:
+        post.media_ids.discard(mid)
+        if post.sent:
+            sent = post.sent_media.pop(mid, None)
+            if sent:
+                await retry(client.delete_messages, target, [sent.id])
+        else:
+            post.media = [m for m in post.media if m.id != mid]
+        await notify(f"🗑 [{post.source}] انحذفت وسائط (msg {mid}) → حذفتها من قناتك")
+    if is_text:
+        post.text_deleted = True
+        post.awaiting_until = time.time() + REPLACE_WINDOW
+        if not post.sent:
+            post.text, post.text_id = None, None
+
+    gone = not post.media_ids and (post.text_deleted or post.text_id is None)
+    if gone:
+        post.cancelled = True
+        if post.sent:
+            ids = [s.id for s in post.sent_media.values()]
+            if post.sent_text:
+                ids.append(post.sent_text.id)
+            if ids:
+                await retry(client.delete_messages, target, ids)
+        for k in post.keys:
+            index.pop(k, None)
+        await notify(f"🗑 [{post.source}] انحذف الموديل كاملاً من المصدر → حذفته من قناتك")
+    elif is_text:
+        spawn(expiry_notice(post, mid))
+        await notify(f"🗑 [{post.source}] انحذف النص (msg {mid}) → بستنى نص بديل {REPLACE_WINDOW} ثانية")
+
+
+# =====================  التشغيل  =====================
 async def main():
-    asyncio.create_task(sender())
-    print("🔥 BULLETPROOF LIVE MODE STARTED")
+    global target, queue
+    queue = asyncio.Queue()
+    await client.start()
+    target = await client.get_entity(TARGET_CHANNEL)
+
+    for name in SOURCES:
+        try:
+            ent = await client.get_entity(name)
+            id_to_name[utils.get_peer_id(ent)] = name
+            channels[name] = Chan(name)
+        except Exception:
+            log.exception("cannot resolve source %s", name)
+
+    chats = list(id_to_name)
+    client.add_event_handler(on_new, events.NewMessage(chats=chats))
+    client.add_event_handler(on_edit, events.MessageEdited(chats=chats))
+    client.add_event_handler(on_delete, events.MessageDeleted())
+
+    spawn(sender())
+    log.info("🔥 BOT STARTED — watching: %s", ", ".join(id_to_name.values()))
     await client.run_until_disconnected()
 
-client.start()
-client.loop.run_until_complete(main())
+
+if __name__ == "__main__":
+    client.loop.run_until_complete(main())
