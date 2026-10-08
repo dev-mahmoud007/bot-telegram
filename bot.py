@@ -159,7 +159,19 @@ def build(title, f):
     if f.get("code"):   out += f"🏷 الكود: {f['code']}\n"
     if f.get("price"):  out += f"💲 السعر: {f['price']}\n"
     out += f"\n🛍 بيع جملة فقط\n📲 للتواصل والطلب:\n{WA_LINK}"
-    return out
+    return rtl(out)
+
+
+RLM = "\u200f"  # علامة اتجاه يمين-ليسار: بتخلي السطر RTL بدون ما تقلب ترتيب الإنجليزي والأرقام
+
+
+def rtl(text):
+    lines = []
+    for l in text.split("\n"):
+        if l.strip() and not l.lstrip().startswith("http"):
+            l = RLM + l
+        lines.append(l)
+    return "\n".join(lines)
 
 
 def format_post(text, source):
@@ -232,6 +244,7 @@ class Chan:
 client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
 target = None
 id_to_name = {}
+entities = {}
 channels = {}
 queue = None
 index = {}          # (source, msg_id) -> Post
@@ -335,11 +348,45 @@ async def sender():
 
 
 # =====================  تجميع المنشورات لكل قناة  =====================
+async def reconcile(p):
+    """يجيب من سيرفر تليجرام الوسائط الناقصة (اللي ما وصلت بالتحديثات الحية)."""
+    ent = entities.get(p.source)
+    if not ent:
+        return
+    try:
+        have = {m.id for m in p.media}
+        found = []
+        if p.text_id and p.text_id not in have:
+            # نص منفصل: كل الوسائط قبله مباشرة اللي لسا ما اننشرت
+            msgs = await retry(client.get_messages, ent, limit=30, max_id=p.text_id)
+            for m in msgs:                      # من الأحدث للأقدم
+                if (p.source, m.id) in index or not is_media(m) or (m.raw_text or "").strip():
+                    break
+                if m.id not in have:
+                    found.append(m)
+        elif p.media:
+            # نص كابشن داخل الألبوم: كمّل باقي صور نفس الألبوم
+            groups = {m.grouped_id for m in p.media if m.grouped_id}
+            if groups:
+                lo, hi = min(have), max(have)
+                msgs = await retry(client.get_messages, ent, limit=40, min_id=lo - 11, max_id=hi + 11)
+                found = [m for m in msgs if m.grouped_id in groups and m.id not in have
+                         and (p.source, m.id) not in index]
+        if found:
+            p.media.extend(found)
+            await notify(f"🧩 [{p.source}] لقيت {len(found)} وسائط ناقصة ما وصلت بالتحديثات وضفتها للموديل")
+    except Exception:
+        log.exception("reconcile failed for %s", p.source)
+
+
 async def flush(ch):
     """يُستدعى والقفل ممسوك."""
     p = ch.pending
     ch.pending = None
     if not p or (not p.media and not p.text):
+        return
+    await reconcile(p)
+    if not p.media and not POST_TEXT_ONLY:
         return
     p.media.sort(key=lambda m: m.id)
     p.media_ids = {m.id for m in p.media}
@@ -393,6 +440,8 @@ async def on_new(event):
         return
     ch = channels[src]
     text = msg.raw_text or ""
+    if (src, msg.id) in index:   # وصلت متأخرة وانضافت للموديل أصلاً
+        return
     async with ch.lock:
         p = ch.pending
         if is_media(msg):
@@ -429,11 +478,10 @@ async def on_new(event):
             await notify(f"🔁 [{src}] وصل نص بديل (msg {msg.id}) → عدّلت نص منشورك\n{short(text)}")
             return
 
-        if POST_TEXT_ONLY:
-            np = Post(src)
-            np.text, np.text_id = text, msg.id
-            ch.pending = np
-            await flush(ch)
+        np = Post(src)
+        np.text, np.text_id = text, msg.id
+        ch.pending = np
+        await flush(ch)
 
 
 async def on_edit(event):
@@ -576,6 +624,7 @@ async def main():
         try:
             ent = await client.get_entity(name)
             id_to_name[utils.get_peer_id(ent)] = name
+            entities[name] = ent
             channels[name] = Chan(name)
         except Exception:
             log.exception("cannot resolve source %s", name)
