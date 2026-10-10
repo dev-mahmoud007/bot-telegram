@@ -3,6 +3,9 @@ import re
 import time
 import asyncio
 import logging
+import shutil
+import tempfile
+from datetime import datetime, timezone
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -28,6 +31,8 @@ REPLACE_WINDOW = 180      # المدة اللي نستنى فيها نص بدي�
 POST_TEXT_ONLY = True     # نشر الرسائل النصية اللي مالها وسائط
 DELETE_TEXT_IF_NOT_REPLACED = False  # لو انحذف النص ولم يأتِ بديل: احذف نصي أنا كمان؟
 MAX_HISTORY = 3000
+POLL_SECONDS = 20         # كل قديش يفحص القنوات مباشرة (شبكة أمان لو فاتت تحديثات حية)
+POLL_MIN_AGE = 8          # ما يلتقط رسالة إلا إذا مر عليها هالعدد من الثواني (يعطي التحديثات الحية فرصة)
 ON_REQUEST = "على الخاص"
 WA_LINK = "https://wa.me/970592417956"
 
@@ -239,6 +244,8 @@ class Chan:
         self.lock = asyncio.Lock()
         self.pending: Optional[Post] = None
         self.recent = deque(maxlen=8)
+        self.seen = set()      # ids الرسائل اللي عالجناها (حية أو من الفحص)
+        self.baseline = 0      # آخر id وقت التشغيل: ما نعالج شي أقدم منه
 
 
 client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
@@ -305,6 +312,20 @@ def short(t, n=150):
 
 
 # =====================  الإرسال (طابور واحد، كل منشور وحدة كاملة)  =====================
+async def send_one(m):
+    """يرسل وسائط وحدة؛ إذا فشل بالمرجع ينزّلها ويرفعها من جديد."""
+    try:
+        return await retry(client.send_file, target, m.media)
+    except Exception as e:
+        log.exception("send by reference failed (%s), trying download/upload", type(e).__name__)
+        tmp = tempfile.mkdtemp()
+        try:
+            path = await client.download_media(m, file=tmp + os.sep)
+            return await retry(client.send_file, target, path, supports_streaming=True)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 async def send_post(post):
     media = sorted(post.media, key=lambda m: m.id)
     try:
@@ -318,7 +339,7 @@ async def send_post(post):
                 log.exception("album failed, sending one by one")
                 pairs = []
                 for m in chunk:
-                    pairs.append((m, await retry(client.send_file, target, m.media)))
+                    pairs.append((m, await send_one(m)))
             for m, s in pairs:
                 post.sent_media[m.id] = s
             if i + 10 < len(media):
@@ -339,9 +360,9 @@ async def sender():
             async with post.lock:
                 if not post.cancelled:
                     await send_post(post)
-        except Exception:
+        except Exception as e:
             log.exception("send failed")
-            await notify(f"⚠️ [{post.source}] فشل إرسال منشور، شوف اللوج")
+            await notify(f"⚠️ [{post.source}] فشل إرسال منشور: {type(e).__name__}: {short(str(e), 200)}")
         finally:
             queue.task_done()
         await asyncio.sleep(0.5)
@@ -434,13 +455,26 @@ async def apply_text(post, mid, text):
 
 
 async def on_new(event):
-    msg = event.message
     src = id_to_name.get(event.chat_id)
-    if not src:
-        return
+    if src:
+        await process_new(src, event.message)
+
+
+async def process_new(src, msg):
     ch = channels[src]
+    if msg.id in ch.seen:
+        return
+    ch.seen.add(msg.id)
+    if len(ch.seen) > 1000:
+        ch.seen = set(sorted(ch.seen)[-500:])
     text = msg.raw_text or ""
+    log.info("IN  [%s] id=%s group=%s media=%s text=%s | pending=%s | %s",
+             src, msg.id, msg.grouped_id, type(msg.media).__name__ if msg.media else "-",
+             bool(text.strip()),
+             (f"{len(ch.pending.media)}m/{'T' if ch.pending.text else '-'}" if ch.pending else "none"),
+             short(text, 40))
     if (src, msg.id) in index:   # وصلت متأخرة وانضافت للموديل أصلاً
+        log.info("SKIP [%s] id=%s already posted", src, msg.id)
         return
     async with ch.lock:
         p = ch.pending
@@ -613,6 +647,26 @@ async def handle_deleted(post, mid):
         await notify(f"🗑 [{post.source}] انحذف النص (msg {mid}) → بستنى نص بديل {REPLACE_WINDOW} ثانية")
 
 
+async def poller():
+    """شبكة أمان: كل فترة بيسأل تليجرام مباشرة عن آخر رسائل كل قناة، وبيعالج أي رسالة ما وصلت بالتحديثات الحية."""
+    await asyncio.sleep(POLL_SECONDS)
+    while True:
+        for src, ch in channels.items():
+            try:
+                msgs = await retry(client.get_messages, entities[src], limit=30)
+                now = datetime.now(timezone.utc)
+                fresh = sorted(
+                    (m for m in msgs if m.id > ch.baseline and m.id not in ch.seen
+                     and (now - m.date).total_seconds() > POLL_MIN_AGE),
+                    key=lambda m: m.id)
+                for m in fresh:
+                    await notify(f"🛟 [{src}] التقطت رسالة (id {m.id}) ما وصلت بالتحديثات الحية")
+                    await process_new(src, m)
+            except Exception:
+                log.exception("poll failed for %s", src)
+        await asyncio.sleep(POLL_SECONDS)
+
+
 # =====================  التشغيل  =====================
 async def main():
     global target, queue
@@ -626,6 +680,8 @@ async def main():
             id_to_name[utils.get_peer_id(ent)] = name
             entities[name] = ent
             channels[name] = Chan(name)
+            last = await client.get_messages(ent, limit=1)
+            channels[name].baseline = last[0].id if last else 0
         except Exception:
             log.exception("cannot resolve source %s", name)
 
@@ -635,6 +691,7 @@ async def main():
     client.add_event_handler(on_delete, events.MessageDeleted())
 
     spawn(sender())
+    spawn(poller())
     log.info("🔥 BOT STARTED — watching: %s", ", ".join(id_to_name.values()))
     await client.run_until_disconnected()
 
