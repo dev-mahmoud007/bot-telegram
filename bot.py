@@ -26,7 +26,8 @@ TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "VeraFashionGaza")
 NOTIFY_TO = os.getenv("NOTIFY_TO", "me")   # وين توصلك إشعارات التعديل/الحذف ("me" = الرسائل المحفوظة، فاضي = تعطيل)
 
 CAPTION_WAIT = 3          # ثواني انتظار بعد آخر وسائط فيها كابشن (نص ضمن الألبوم)
-MEDIA_WAIT = 30           # ثواني انتظار النص بعد وسائط بدون نص قبل ما ننشرها لحالها
+MEDIA_WAIT = 120          # كم ثانية نستنى النص بعد وسائط بدون نص؛ إذا ما إجا نتجاهل الوسائط (ما بتنشر أبداً بدون نص)
+MERGE_WINDOW = 15         # وسائط جديدة بعد هالمدة من آخر وسائط بدون نص = موديل جديد، والقديم بنتجاهله
 REPLACE_WINDOW = 180      # المدة اللي نستنى فيها نص بديل بعد ما المصدر يحذف النص
 POST_TEXT_ONLY = True     # نشر الرسائل النصية اللي مالها وسائط
 DELETE_TEXT_IF_NOT_REPLACED = False  # لو انحذف النص ولم يأتِ بديل: احذف نصي أنا كمان؟
@@ -226,6 +227,7 @@ class Post:
     text_id: Optional[int] = None
     last_group: Optional[int] = None
     version: int = 0
+    last_ts: float = 0.0
     lock: Any = field(default_factory=asyncio.Lock)
     sent: bool = False
     cancelled: bool = False
@@ -400,11 +402,22 @@ async def reconcile(p):
         log.exception("reconcile failed for %s", p.source)
 
 
+async def drop_pending(ch, why):
+    """يتجاهل وسائط بدون نص (ما بتنشر، فما في شي يتحذف من قناتك)."""
+    p = ch.pending
+    ch.pending = None
+    if p and p.media and not p.text:
+        await notify(f"🧹 [{ch.name}] تجاهلت {len(p.media)} وسائط بدون نص ({why}) — ما نشرتها")
+
+
 async def flush(ch):
     """يُستدعى والقفل ممسوك."""
     p = ch.pending
     ch.pending = None
     if not p or (not p.media and not p.text):
+        return
+    if p.media and not p.text:      # وسائط بدون نص: ممنوع تنشر
+        log.info("flush skipped: media without text [%s]", p.source)
         return
     await reconcile(p)
     if not p.media and not POST_TEXT_ONLY:
@@ -423,7 +436,10 @@ def arm_timer(ch, p, delay):
         await asyncio.sleep(delay)
         async with ch.lock:
             if ch.pending is p and p.version == v:
-                await flush(ch)
+                if p.text:
+                    await flush(ch)
+                else:
+                    await drop_pending(ch, f"ما إجا نص خلال {MEDIA_WAIT} ثانية")
 
     spawn(run())
 
@@ -483,9 +499,13 @@ async def process_new(src, msg):
             if p and p.text and not same_album:
                 await flush(ch)
                 p = None
+            if p and not p.text and not same_album and time.time() - p.last_ts > MERGE_WINDOW:
+                await drop_pending(ch, "وصلت وسائط موديل جديد وما إجا نص للقديم")
+                p = None
             if p is None:
                 p = ch.pending = Post(src)
             p.media.append(msg)
+            p.last_ts = time.time()
             p.last_group = msg.grouped_id
             if text.strip():
                 p.text, p.text_id = text, msg.id
